@@ -102,6 +102,35 @@
             animation: checkPop 0.28s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
         }
 
+        /* Continuous Vigorous Bell Ringing Animation */
+        @keyframes bellRing {
+            0% { transform: rotate(0deg) scale(1); }
+            10% { transform: rotate(22deg) scale(1.12); }
+            20% { transform: rotate(-20deg) scale(1.12); }
+            30% { transform: rotate(18deg) scale(1.12); }
+            40% { transform: rotate(-16deg) scale(1.12); }
+            50% { transform: rotate(12deg) scale(1.08); }
+            60% { transform: rotate(-10deg) scale(1.08); }
+            70% { transform: rotate(6deg) scale(1.04); }
+            80% { transform: rotate(-4deg) scale(1.02); }
+            90% { transform: rotate(2deg) scale(1); }
+            100% { transform: rotate(0deg) scale(1); }
+        }
+        .animate-bell-ring {
+            animation: bellRing 0.85s ease-in-out infinite;
+            transform-origin: top center;
+        }
+
+        /* Pulsing Glow Ring for Active Alarm Bell */
+        @keyframes alarmPulseRing {
+            0% { transform: scale(0.92); box-shadow: 0 0 0 0 rgba(244, 63, 94, 0.75); }
+            70% { transform: scale(1); box-shadow: 0 0 0 14px rgba(244, 63, 94, 0); }
+            100% { transform: scale(0.92); box-shadow: 0 0 0 0 rgba(244, 63, 94, 0); }
+        }
+        .alarm-pulse-glow {
+            animation: alarmPulseRing 1.3s infinite;
+        }
+
         /* Smooth Slide Up for Modals */
         @keyframes slideUp {
             from { transform: translateY(100%); opacity: 0.5; }
@@ -185,6 +214,106 @@
                 </button>
             </div>
         </header>
+
+        <!-- REAL-TIME CLOCK & BIG RINGING ALARM BELL WIDGET -->
+        <section id="alarmHeaderWidget" class="ios-glass rounded-3xl p-3.5 mb-4 border border-white/10 transition-all duration-300 relative overflow-hidden">
+            <div class="flex items-center justify-between gap-3">
+                <!-- Left: Big Visual Ringing Bell Button -->
+                <div class="flex items-center gap-3 min-w-0">
+                    <button 
+                        type="button"
+                        id="bigBellButton"
+                        onclick="handleBigBellTap()"
+                        title="Tap to Enable Sound or Stop Active Alarm"
+                        class="w-14 h-14 rounded-2xl bg-gradient-to-br from-amber-500/20 via-violet-600/20 to-rose-500/20 border border-amber-400/30 flex items-center justify-center relative flex-shrink-0 active:scale-95 transition"
+                    >
+                        <!-- Glowing ring behind bell when ringing -->
+                        <span id="bigBellGlowRing" class="hidden absolute inset-0 rounded-2xl border-2 border-rose-500 alarm-pulse-glow pointer-events-none"></span>
+                        
+                        <!-- Large Bell SVG -->
+                        <svg id="bigBellSvg" class="w-8 h-8 text-amber-400 transition-colors" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/>
+                        </svg>
+
+                        <!-- Active Alarm Count Badge -->
+                        <span id="bigBellBadge" class="hidden absolute -top-1.5 -right-1.5 min-w-[20px] h-[20px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-extrabold flex items-center justify-center shadow-lg">!</span>
+                    </button>
+
+                    <div class="min-w-0">
+                        <div class="flex items-center gap-1.5">
+                            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping" id="liveClockDot"></span>
+                            <span id="liveClockTime" class="text-sm sm:text-base font-extrabold text-white tracking-tight tabular-nums">--:--:-- --</span>
+                        </div>
+                        <p id="alarmStatusSubtext" class="text-[11px] text-slate-400 truncate mt-0.5">
+                            Tap "Sound On" para mo-tingog sa iPhone
+                        </p>
+                        <p id="nextAlarmCountdown" class="text-[10px] font-semibold text-amber-300 truncate mt-0.5">
+                            Walay naka-set nga alarm karon
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Right: Sound Enabler & Test Alarm Controls -->
+                <div class="flex flex-col gap-1.5 flex-shrink-0">
+                    <button 
+                        type="button"
+                        id="soundToggleBtn"
+                        onclick="toggleSoundPermission()"
+                        class="px-3 py-1.5 rounded-xl text-[11px] font-extrabold border transition flex items-center justify-center gap-1 bg-amber-500/20 border-amber-400/40 text-amber-300 hover:bg-amber-500/30 active:scale-95"
+                    >
+                        <span id="soundToggleIcon">🔇</span>
+                        <span id="soundToggleText">Enable Sound</span>
+                    </button>
+                    <button 
+                        type="button"
+                        onclick="triggerTestAlarm()"
+                        class="px-3 py-1.5 rounded-xl text-[10px] font-bold bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 active:scale-95 transition flex items-center justify-center gap-1"
+                    >
+                        <span>🔔 Test Alarm</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- ACTIVE RINGING ALARM URGENT BANNER (Hidden until alarm triggers) -->
+            <div id="activeAlarmBanner" class="hidden mt-3 pt-3 border-t border-rose-500/40 bg-gradient-to-r from-rose-950/80 via-red-900/60 to-amber-950/80 -mx-3.5 -mb-3.5 p-3.5 rounded-b-3xl">
+                <div class="flex items-start justify-between gap-2 mb-2.5">
+                    <div class="flex items-center gap-2">
+                        <span class="px-2 py-0.5 rounded-md bg-rose-500 text-white text-[10px] font-extrabold uppercase tracking-wider animate-pulse">
+                            ⏰ ALARM RINGING NOW!
+                        </span>
+                        <span id="ringingAlarmTimeBadge" class="text-xs font-extrabold text-amber-300">08:30 AM</span>
+                    </div>
+                </div>
+                <h4 id="ringingAlarmTitle" class="text-base font-extrabold text-white leading-snug mb-1">
+                    Agenda Title Here
+                </h4>
+                <p id="ringingAlarmNote" class="text-xs text-rose-200/90 mb-3"></p>
+
+                <div class="grid grid-cols-3 gap-2">
+                    <button 
+                        type="button"
+                        onclick="stopActiveAlarm(true)"
+                        class="py-2.5 px-2 rounded-xl bg-white/15 hover:bg-white/25 text-white text-xs font-extrabold active:scale-95 transition border border-white/20"
+                    >
+                        🔕 Stop Bell
+                    </button>
+                    <button 
+                        type="button"
+                        onclick="snoozeActiveAlarm(5)"
+                        class="py-2.5 px-2 rounded-xl bg-amber-500/30 hover:bg-amber-500/40 text-amber-200 text-xs font-extrabold active:scale-95 transition border border-amber-400/40"
+                    >
+                        💤 +5 Mins
+                    </button>
+                    <button 
+                        type="button"
+                        onclick="markRingingAgendaDone()"
+                        class="py-2.5 px-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-[#0f0e1a] text-xs font-extrabold active:scale-95 transition shadow-lg shadow-emerald-500/30"
+                    >
+                        ✓ Done Na
+                    </button>
+                </div>
+            </div>
+        </section>
 
         <!-- PROMINENT SELECTED DAY & DATE HERO CARD -->
         <section class="ios-glass rounded-3xl p-4 mb-4 shadow-xl shadow-black/30 relative overflow-hidden">
@@ -308,11 +437,11 @@
                         <span>Add Agenda para sa <span id="formTargetDateLabel" class="underline decoration-violet-400">Oct 26</span></span>
                     </label>
                     <button type="button" onclick="toggleAdvancedAdd()" id="toggleDetailsBtn" class="text-[11px] font-semibold text-blue-400 hover:text-blue-300">
-                        + Oras & Priority
+                        + Priority & Note
                     </button>
                 </div>
 
-                <div class="flex gap-2">
+                <div class="flex gap-2 mb-2.5">
                     <input 
                         type="text" 
                         id="agendaTitleInput" 
@@ -332,25 +461,30 @@
                     </button>
                 </div>
 
-                <!-- Collapsible Extra Options: Time, Priority, Note -->
+                <!-- Always-Visible Alarm Time Picker Row -->
+                <div class="flex items-center justify-between gap-2 bg-[#121120]/90 px-3 py-2 rounded-xl border border-white/10">
+                    <div class="flex items-center gap-2">
+                        <svg class="w-4 h-4 text-amber-400 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/>
+                        </svg>
+                        <label for="agendaTimeInput" class="text-[11px] font-bold text-slate-300">Oras sa Alarm (Optional):</label>
+                    </div>
+                    <input 
+                        type="time" 
+                        id="agendaTimeInput" 
+                        class="bg-[#1c1b2e] text-xs font-bold text-amber-300 rounded-lg px-2.5 py-1.5 border border-amber-500/30 focus:outline-none focus:border-amber-400"
+                    >
+                </div>
+
+                <!-- Collapsible Extra Options: Priority & Note -->
                 <div id="advancedAddOptions" class="hidden mt-3 pt-3 border-t border-white/10 space-y-2.5">
-                    <div class="grid grid-cols-2 gap-2">
-                        <div>
-                            <label class="block text-[10px] font-semibold uppercase text-slate-400 mb-1">Oras (Optional)</label>
-                            <input 
-                                type="time" 
-                                id="agendaTimeInput" 
-                                class="w-full bg-[#121120] text-xs text-slate-200 rounded-xl px-3 py-2 border border-white/10 focus:outline-none focus:border-violet-500"
-                            >
-                        </div>
-                        <div>
-                            <label class="block text-[10px] font-semibold uppercase text-slate-400 mb-1">Priority Level</label>
-                            <select id="agendaPriorityInput" class="w-full bg-[#121120] text-xs text-slate-200 font-semibold rounded-xl px-3 py-2 border border-white/10 focus:outline-none focus:border-violet-500">
-                                <option value="normal">Normal • Kasagaran</option>
-                                <option value="important">Important • Importante</option>
-                                <option value="urgent">Urgent • Kinahanglan Dayon</option>
-                            </select>
-                        </div>
+                    <div>
+                        <label class="block text-[10px] font-semibold uppercase text-slate-400 mb-1">Priority Level</label>
+                        <select id="agendaPriorityInput" class="w-full bg-[#121120] text-xs text-slate-200 font-semibold rounded-xl px-3 py-2 border border-white/10 focus:outline-none focus:border-violet-500">
+                            <option value="normal">Normal • Kasagaran</option>
+                            <option value="important">Important • Importante</option>
+                            <option value="urgent">Urgent • Kinahanglan Dayon</option>
+                        </select>
                     </div>
                     <div>
                         <input 
@@ -573,6 +707,358 @@
         let currentFilter = 'all'; // 'all' | 'pending' | 'done'
         let agendaData = {}; // Object mapping 'YYYY-MM-DD' -> Array of agenda objects
 
+        // Alarm & Audio System State
+        let audioCtx = null;
+        let soundEnabled = false;
+        let alarmRingInterval = null;
+        let activeRingingItem = null; // { dateKey, agendaId, isTest }
+        let dismissedAlarmKeys = {}; // Maps 'YYYY-MM-DD_agendaId_HH:MM' -> true so dismissed alarms don't re-trigger in the same minute
+
+        /**
+         * Initialize / Unlock Web Audio API on user gesture (Required for iOS Safari)
+         */
+        function initOrUnlockAudio() {
+            try {
+                const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+                if (!AudioContextClass) return false;
+
+                if (!audioCtx) {
+                    audioCtx = new AudioContextClass();
+                }
+                if (audioCtx.state === 'suspended') {
+                    audioCtx.resume();
+                }
+
+                // Play a tiny silent buffer to unlock iOS Safari audio channel
+                const buffer = audioCtx.createBuffer(1, 1, 22050);
+                const source = audioCtx.createBufferSource();
+                source.buffer = buffer;
+                source.connect(audioCtx.destination);
+                source.start(0);
+
+                soundEnabled = true;
+                updateSoundToggleUI();
+                return true;
+            } catch (e) {
+                console.warn('Web Audio unlock error:', e);
+                return false;
+            }
+        }
+
+        /**
+         * Toggle Sound Permission button in the top Alarm Widget
+         */
+        function toggleSoundPermission() {
+            if (!soundEnabled) {
+                const ok = initOrUnlockAudio();
+                if (ok) {
+                    playAlarmChimeBurst();
+                    showToast('🔊 Alarm Sound Enabled na para sa imong iPhone!');
+                } else {
+                    showToast('Visual Bell mode active (Audio dili suportado).');
+                }
+            } else {
+                soundEnabled = false;
+                if (alarmRingInterval) {
+                    // Keep visual bell ringing if active, just mute sound
+                }
+                updateSoundToggleUI();
+                showToast('🔇 Alarm Sound Muted (Visual Bell magpadayon).');
+            }
+        }
+
+        function updateSoundToggleUI() {
+            const btn = document.getElementById('soundToggleBtn');
+            const icon = document.getElementById('soundToggleIcon');
+            const text = document.getElementById('soundToggleText');
+            const subtext = document.getElementById('alarmStatusSubtext');
+
+            if (soundEnabled) {
+                btn.className = 'px-3 py-1.5 rounded-xl text-[11px] font-extrabold border transition flex items-center justify-center gap-1 bg-emerald-500/20 border-emerald-400/40 text-emerald-300 hover:bg-emerald-500/30 active:scale-95';
+                icon.textContent = '🔊';
+                text.textContent = 'Sound ON';
+                subtext.textContent = 'Phone Alarm Sound + Big Bell Active';
+            } else {
+                btn.className = 'px-3 py-1.5 rounded-xl text-[11px] font-extrabold border transition flex items-center justify-center gap-1 bg-amber-500/20 border-amber-400/40 text-amber-300 hover:bg-amber-500/30 active:scale-95';
+                icon.textContent = '🔇';
+                text.textContent = 'Enable Sound';
+                subtext.textContent = 'Visual Bell Active • Tap Enable Sound';
+            }
+        }
+
+        /**
+         * Synthesize an iOS-inspired rhythmic double-chime alarm burst using Web Audio API
+         */
+        function playAlarmChimeBurst() {
+            if (!soundEnabled) return;
+            try {
+                if (!audioCtx) initOrUnlockAudio();
+                if (!audioCtx) return;
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+
+                const now = audioCtx.currentTime;
+                const notes = [880, 1174.66, 1318.51, 1760]; // A5, D6, E6, A6 crystal alarm chime
+
+                notes.forEach((freq, idx) => {
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+
+                    osc.type = 'triangle';
+                    osc.frequency.setValueAtTime(freq, now + idx * 0.11);
+
+                    gain.gain.setValueAtTime(0.001, now + idx * 0.11);
+                    gain.gain.exponentialRampToValueAtTime(0.32, now + idx * 0.11 + 0.02);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.11 + 0.22);
+
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+
+                    osc.start(now + idx * 0.11);
+                    osc.stop(now + idx * 0.11 + 0.24);
+                });
+
+                // Vibrate on supported mobile devices
+                if (navigator.vibrate) {
+                    navigator.vibrate([250, 120, 250]);
+                }
+            } catch (e) {
+                console.warn('Audio playback skipped:', e);
+            }
+        }
+
+        /**
+         * Start the Big Ringing Bell & Repeating Phone Alarm State
+         */
+        function startAlarmRinging(dateKey, agendaItem, isTest = false) {
+            if (activeRingingItem && activeRingingItem.agendaId === agendaItem.id && !isTest) {
+                return; // Already ringing for this item
+            }
+
+            activeRingingItem = {
+                dateKey,
+                agendaId: agendaItem.id,
+                title: agendaItem.title,
+                time: agendaItem.time || 'Karon',
+                note: agendaItem.note || '',
+                isTest
+            };
+
+            // 1. Activate Big Bell Visual Animation & Urgent Banner
+            const widget = document.getElementById('alarmHeaderWidget');
+            const bigBellBtn = document.getElementById('bigBellButton');
+            const bigBellSvg = document.getElementById('bigBellSvg');
+            const bigBellGlow = document.getElementById('bigBellGlowRing');
+            const bigBellBadge = document.getElementById('bigBellBadge');
+            const banner = document.getElementById('activeAlarmBanner');
+
+            widget.classList.add('border-rose-500', 'shadow-2xl', 'shadow-rose-600/30');
+            bigBellBtn.classList.add('bg-rose-500/30', 'border-rose-400');
+            bigBellSvg.classList.add('animate-bell-ring', 'text-rose-400');
+            bigBellSvg.classList.remove('text-amber-400');
+            bigBellGlow.classList.remove('hidden');
+            bigBellBadge.classList.remove('hidden');
+
+            document.getElementById('ringingAlarmTimeBadge').textContent = agendaItem.time ? formatTime12Hr(agendaItem.time) : 'TEST ALARM';
+            document.getElementById('ringingAlarmTitle').textContent = agendaItem.title;
+            document.getElementById('ringingAlarmNote').textContent = agendaItem.note || 'Natunong na sa oras ang imong agenda!';
+            banner.classList.remove('hidden');
+
+            // Re-render agenda list so the specific card's bell also shakes vigorously
+            renderAgendasForSelectedDate();
+
+            // 2. Start Repeating Chime Loop (every 1.4 seconds)
+            if (alarmRingInterval) clearInterval(alarmRingInterval);
+            playAlarmChimeBurst();
+            alarmRingInterval = setInterval(() => {
+                playAlarmChimeBurst();
+            }, 1400);
+        }
+
+        /**
+         * Stop / Dismiss the currently ringing alarm
+         */
+        function stopActiveAlarm(recordDismissal = true) {
+            if (alarmRingInterval) {
+                clearInterval(alarmRingInterval);
+                alarmRingInterval = null;
+            }
+
+            if (activeRingingItem && recordDismissal && !activeRingingItem.isTest) {
+                const dismissKey = `${activeRingingItem.dateKey}_${activeRingingItem.agendaId}_${activeRingingItem.time}`;
+                dismissedAlarmKeys[dismissKey] = true;
+            }
+
+            activeRingingItem = null;
+
+            // Reset Big Bell Visuals
+            const widget = document.getElementById('alarmHeaderWidget');
+            const bigBellBtn = document.getElementById('bigBellButton');
+            const bigBellSvg = document.getElementById('bigBellSvg');
+            const bigBellGlow = document.getElementById('bigBellGlowRing');
+            const bigBellBadge = document.getElementById('bigBellBadge');
+            const banner = document.getElementById('activeAlarmBanner');
+
+            widget.classList.remove('border-rose-500', 'shadow-2xl', 'shadow-rose-600/30');
+            bigBellBtn.classList.remove('bg-rose-500/30', 'border-rose-400');
+            bigBellSvg.classList.remove('animate-bell-ring', 'text-rose-400');
+            bigBellSvg.classList.add('text-amber-400');
+            bigBellGlow.classList.add('hidden');
+            bigBellBadge.classList.add('hidden');
+            banner.classList.add('hidden');
+
+            renderAgendasForSelectedDate();
+            showToast('🔕 Gi-undang na ang alarm bell.');
+        }
+
+        /**
+         * Snooze the currently ringing alarm by +5 minutes
+         */
+        function snoozeActiveAlarm(minutesToAdd = 5) {
+            if (!activeRingingItem) return;
+            const { dateKey, agendaId, isTest } = activeRingingItem;
+
+            const now = new Date();
+            now.setMinutes(now.getMinutes() + minutesToAdd);
+            const newTimeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+            if (!isTest && agendaData[dateKey]) {
+                const item = agendaData[dateKey].find(a => a.id === agendaId);
+                if (item) {
+                    item.time = newTimeStr;
+                    item.alarmEnabled = true;
+                    saveAgendasToStorage();
+                }
+            }
+
+            stopActiveAlarm(false);
+            showToast(`💤 Na-snooze! Mo-ring balik sa ${formatTime12Hr(newTimeStr)}`);
+        }
+
+        /**
+         * Immediately mark the ringing agenda item as Done and stop the alarm
+         */
+        function markRingingAgendaDone() {
+            if (!activeRingingItem) return;
+            const { dateKey, agendaId, isTest } = activeRingingItem;
+
+            if (!isTest && agendaData[dateKey]) {
+                const item = agendaData[dateKey].find(a => a.id === agendaId);
+                if (item) {
+                    item.done = true;
+                    saveAgendasToStorage();
+                }
+            }
+
+            stopActiveAlarm(true);
+            setSelectedDate(selectedDateStr);
+            showToast('✓ Human na ang agenda ug gi-undang na ang alarm!');
+        }
+
+        /**
+         * Trigger a Test Alarm anytime so the user can see the Big Bell shake & hear the sound
+         */
+        function triggerTestAlarm() {
+            initOrUnlockAudio();
+            startAlarmRinging(
+                selectedDateStr,
+                {
+                    id: 'test-alarm',
+                    title: 'Test Alarm • Mao kini ang tingog ug uyog sa Bell!',
+                    time: '',
+                    note: 'I-tap ang "Stop Bell" o "Done Na" aron ma-undang.'
+                },
+                true
+            );
+        }
+
+        /**
+         * Handle tapping the Big Bell Icon in the header
+         */
+        function handleBigBellTap() {
+            if (activeRingingItem) {
+                stopActiveAlarm(true);
+            } else {
+                initOrUnlockAudio();
+                triggerTestAlarm();
+            }
+        }
+
+        /**
+         * Real-time 1-second Clock & Automatic Alarm Checker
+         */
+        function updateLiveClockAndCheckAlarms() {
+            const now = new Date();
+            const hours24 = now.getHours();
+            const mins = now.getMinutes();
+            const secs = now.getSeconds();
+            const ampm = hours24 >= 12 ? 'PM' : 'AM';
+            const hours12 = hours24 % 12 || 12;
+
+            const timeDisplay = `${String(hours12).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')} ${ampm}`;
+            const clockEl = document.getElementById('liveClockTime');
+            if (clockEl) {
+                clockEl.textContent = `${SHORT_MONTHS[now.getMonth()]} ${now.getDate()}, ${now.getFullYear()} • ${timeDisplay}`;
+            }
+
+            // Current DateKey & HH:MM
+            const todayKey = toDateKey(now);
+            const currentHHMM = `${String(hours24).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+
+            // Also check `selectedDateStr` if the user is testing on the currently selected date, plus `todayKey`
+            const keysToCheck = Array.from(new Set([todayKey, selectedDateStr]));
+            let upcomingAlarms = [];
+
+            keysToCheck.forEach(dKey => {
+                const list = agendaData[dKey] || [];
+                list.forEach(item => {
+                    if (!item.done && item.time && item.alarmEnabled !== false) {
+                        if (dKey === todayKey || dKey === selectedDateStr) {
+                            upcomingAlarms.push({ dKey, item });
+                        }
+                        const dismissKey = `${dKey}_${item.id}_${item.time}`;
+                        if (item.time === currentHHMM && !dismissedAlarmKeys[dismissKey]) {
+                            startAlarmRinging(dKey, item, false);
+                        }
+                    }
+                });
+            });
+
+            // Update Next Alarm Indicator text
+            const nextEl = document.getElementById('nextAlarmCountdown');
+            if (nextEl) {
+                const todayList = (agendaData[selectedDateStr] || []).filter(
+                    a => !a.done && a.time && a.alarmEnabled !== false
+                ).sort((a, b) => a.time.localeCompare(b.time));
+
+                if (todayList.length > 0) {
+                    const nextItem = todayList.find(a => a.time >= currentHHMM) || todayList[0];
+                    nextEl.textContent = `🔔 Sunod Alarm: ${formatTime12Hr(nextItem.time)} — "${nextItem.title.slice(0, 26)}"`;
+                } else {
+                    nextEl.textContent = 'Walay pending nga alarm ani nga petsa';
+                }
+            }
+        }
+
+        /**
+         * Toggle individual agenda item's Alarm Bell ON / OFF
+         */
+        function toggleItemAlarmBell(agendaId, event) {
+            if (event) event.stopPropagation();
+            const list = agendaData[selectedDateStr] || [];
+            const item = list.find(a => a.id === agendaId);
+            if (!item) return;
+
+            item.alarmEnabled = item.alarmEnabled === false ? true : false;
+            saveAgendasToStorage();
+
+            if (activeRingingItem && activeRingingItem.agendaId === agendaId && !item.alarmEnabled) {
+                stopActiveAlarm(true);
+            } else {
+                renderAgendasForSelectedDate();
+                showToast(item.alarmEnabled ? `🔔 Alarm ON para sa ${formatTime12Hr(item.time)}` : '🔕 Alarm OFF para ani nga agenda');
+            }
+        }
+
         /**
          * Generate an Apple Touch Icon dynamically via Canvas so iPhone Home Screen gets the icon
          */
@@ -668,8 +1154,9 @@
                                 id: 'seed-1',
                                 title: 'Susiha ang akong mga buhatonon karon sa Agenda Ko',
                                 time: '08:30',
+                                alarmEnabled: true,
                                 priority: 'important',
-                                note: 'I-tap ang lingin sa wala aron ma-mark nga Done!',
+                                note: 'I-tap ang Bell icon o "Test Alarm" sa taas aron suwayan ang alarm!',
                                 done: false,
                                 createdAt: Date.now()
                             },
@@ -677,6 +1164,7 @@
                                 id: 'seed-2',
                                 title: 'Magplano sa mga future agendas (2026 - 2040)',
                                 time: '14:00',
+                                alarmEnabled: true,
                                 priority: 'normal',
                                 note: 'Pili lang og Month, Day, ug Year sa taas',
                                 done: true,
@@ -952,15 +1440,37 @@
 
             container.innerHTML = sorted.map(item => {
                 const priorityBadge = getPriorityBadgeHtml(item.priority);
+                const isAlarmOn = item.alarmEnabled !== false;
+                const isThisRinging = activeRingingItem && activeRingingItem.agendaId === item.id;
+
                 const timeBadge = item.time
-                    ? `<span class="text-[11px] font-semibold text-blue-300 bg-blue-500/15 border border-blue-500/25 px-2 py-0.5 rounded-lg flex items-center gap-1">
-                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                        ${formatTime12Hr(item.time)}
-                       </span>`
+                    ? `<button 
+                        type="button"
+                        onclick="toggleItemAlarmBell('${item.id}', event)"
+                        title="${isAlarmOn ? 'Alarm ON (Tap to Mute)' : 'Alarm OFF (Tap to Enable)'}"
+                        class="text-[11px] font-bold px-2.5 py-0.5 rounded-lg flex items-center gap-1.5 transition active:scale-95 ${
+                            isThisRinging
+                                ? 'bg-rose-500 text-white shadow-lg shadow-rose-500/40 animate-pulse'
+                                : isAlarmOn && !item.done
+                                    ? 'text-amber-300 bg-amber-500/15 border border-amber-400/30 hover:bg-amber-500/25'
+                                    : 'text-slate-400 bg-white/5 border border-white/10'
+                        }">
+                        <svg class="w-3.5 h-3.5 ${isThisRinging ? 'animate-bell-ring text-white' : isAlarmOn && !item.done ? 'text-amber-400' : 'text-slate-500'}" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/>
+                        </svg>
+                        <span>${formatTime12Hr(item.time)}</span>
+                        <span class="text-[9px] uppercase opacity-80">${isAlarmOn ? 'ON' : 'OFF'}</span>
+                       </button>`
                     : '';
 
                 return `
-                    <div class="ios-glass rounded-2xl p-3.5 transition all duration-200 border ${item.done ? 'border-emerald-500/25 bg-[#161527]/70' : 'border-white/10'} flex items-start gap-3">
+                    <div class="ios-glass rounded-2xl p-3.5 transition all duration-200 border ${
+                        isThisRinging 
+                            ? 'border-rose-500 bg-rose-950/40 shadow-xl shadow-rose-500/20' 
+                            : item.done 
+                                ? 'border-emerald-500/25 bg-[#161527]/70' 
+                                : 'border-white/10'
+                    } flex items-start gap-3">
                         <!-- Custom One-Tap Done Checkbox -->
                         <button 
                             type="button"
@@ -989,12 +1499,31 @@
                             <div class="flex items-center flex-wrap gap-1.5 mt-2">
                                 ${timeBadge}
                                 ${priorityBadge}
+                                ${isThisRinging ? '<span class="text-[10px] font-extrabold uppercase text-white bg-rose-500 px-2 py-0.5 rounded-md animate-bounce">🔔 RINGING!</span>' : ''}
                                 ${item.done ? '<span class="text-[10px] font-extrabold uppercase text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md">✓ Human Na</span>' : ''}
                             </div>
                         </div>
 
-                        <!-- Edit & Delete Action Buttons -->
+                        <!-- Prominent Side Bell Indicator (Shakes when ringing or toggles alarm) & Edit/Delete -->
                         <div class="flex items-center gap-1 flex-shrink-0">
+                            ${item.time && !item.done ? `
+                                <button 
+                                    type="button"
+                                    onclick="toggleItemAlarmBell('${item.id}', event)"
+                                    title="${isAlarmOn ? 'Bell Alarm Active' : 'Bell Alarm Muted'}"
+                                    class="p-2 rounded-xl transition ${
+                                        isThisRinging 
+                                            ? 'bg-rose-500 text-white animate-bell-ring shadow-lg shadow-rose-500/50' 
+                                            : isAlarmOn 
+                                                ? 'bg-amber-500/15 text-amber-400 hover:bg-amber-500/25' 
+                                                : 'bg-white/5 text-slate-500 hover:text-slate-300'
+                                    }"
+                                >
+                                    <svg class="w-5 h-5 ${isThisRinging ? 'animate-bell-ring' : ''}" fill="currentColor" viewBox="0 0 24 24">
+                                        <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/>
+                                    </svg>
+                                </button>
+                            ` : ''}
                             <button 
                                 type="button" 
                                 onclick="openEditModal('${item.id}')" 
@@ -1034,10 +1563,16 @@
             const title = titleInput.value.trim();
             if (!title) return;
 
+            // Automatically unlock audio when user adds a timed agenda
+            if (timeInput.value && !soundEnabled) {
+                initOrUnlockAudio();
+            }
+
             const newAgenda = {
                 id: 'ag-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
                 title,
                 time: timeInput.value || '',
+                alarmEnabled: true,
                 priority: priorityInput.value || 'normal',
                 note: noteInput.value.trim(),
                 done: false,
@@ -1058,7 +1593,7 @@
 
             // Refresh UI
             setSelectedDate(selectedDateStr);
-            showToast('Nadugang na ang imong agenda!');
+            showToast(newAgenda.time ? `🔔 Nadugang ang agenda uban sa Alarm (${formatTime12Hr(newAgenda.time)})!` : 'Nadugang na ang imong agenda!');
         }
 
         /**
@@ -1071,6 +1606,12 @@
 
             item.done = !item.done;
             saveAgendasToStorage();
+
+            // If this item is currently ringing and was marked Done, stop the alarm immediately
+            if (item.done && activeRingingItem && activeRingingItem.agendaId === agendaId) {
+                stopActiveAlarm(true);
+            }
+
             renderWeekStrip(parseDateKey(selectedDateStr));
             renderAgendasForSelectedDate();
 
@@ -1169,7 +1710,7 @@
             const box = document.getElementById('advancedAddOptions');
             const btn = document.getElementById('toggleDetailsBtn');
             box.classList.toggle('hidden');
-            btn.textContent = box.classList.contains('hidden') ? '+ Oras & Priority' : '−ago Details';
+            btn.textContent = box.classList.contains('hidden') ? '+ Priority & Note' : '− Tagoa ang Details';
         }
 
         /**
@@ -1371,6 +1912,10 @@
             // Start on Today's date (clamped to 2026 - 2040)
             const initialDate = clampDateToRange(new Date());
             setSelectedDate(toDateKey(initialDate));
+
+            // Start Live Clock & Real-Time Alarm Checker (runs every second)
+            updateLiveClockAndCheckAlarms();
+            setInterval(updateLiveClockAndCheckAlarms, 1000);
         };
     </script>
 </body>
