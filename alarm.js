@@ -1,336 +1,475 @@
 /**
- * alarm.js
- * Dedicated Alarm & Ringing Bell Engine (Optimized for iOS Safari & Home Screen PWA)
+ * app.js
+ * Main Application Logic: Date Selector (2026-2040), Monday-Sunday Strip, & LocalStorage CRUD
  */
 
-const AlarmEngine = {
-  soundEnabled: false,
-  isRinging: false,
-  activeAgendaId: null,
-  audioCtx: null,
-  beepInterval: null,
-  triggeredKeys: new Set(), // Tracks "YYYY-MM-DD_id_HH:MM" so it doesn't re-trigger after stopping
+const STORAGE_KEY = "agenda_ko_data_v2";
+const MIN_YEAR = 2026;
+const MAX_YEAR = 2040;
+
+const MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December"
+];
+
+const WEEKDAYS_MON_FIRST = [
+  { short: "Mon", full: "Monday", jsDay: 1 },
+  { short: "Tue", full: "Tuesday", jsDay: 2 },
+  { short: "Wed", full: "Wednesday", jsDay: 3 },
+  { short: "Thu", full: "Thursday", jsDay: 4 },
+  { short: "Fri", full: "Friday", jsDay: 5 },
+  { short: "Sat", full: "Saturday", jsDay: 6 },
+  { short: "Sun", full: "Sunday", jsDay: 0 }
+];
+
+const AgendaApp = {
+  selectedYear: 2026,
+  selectedMonth: 0, // 0 = Jan
+  selectedDay: 1,
+  currentFilter: "all", // 'all' | 'pending' | 'done'
+  allData: {}, // { "YYYY-MM-DD": [ { id, title, time, priority, done } ] }
 
   init() {
-    this.audioEl = document.getElementById("ios-alarm-audio");
-    this.giantBellBox = document.getElementById("giant-bell-box");
-    this.giantBellSvg = document.getElementById("giant-bell-svg");
-    this.giantBellPulse = document.getElementById("giant-bell-pulse");
-    this.bellStateText = document.getElementById("bell-state-text");
-    this.banner = document.getElementById("active-alarm-banner");
-    this.bannerTitle = document.getElementById("alarm-banner-title");
-    this.bannerTime = document.getElementById("alarm-banner-time");
-    this.btnEnableSound = document.getElementById("btn-enable-sound");
-    this.btnTestAlarm = document.getElementById("btn-test-alarm");
+    this.loadFromStorage();
 
-    // 1. Pag-generate og tinuod nga WAV Audio file sulod sa memory para sa iOS <audio> tag
-    this.audioEl.src = this.createAlarmWavDataUri();
+    // Set initial date to Today (clamped between 2026 and 2040)
+    const now = new Date();
+    const yr = Math.min(Math.max(now.getFullYear(), MIN_YEAR), MAX_YEAR);
+    this.selectedYear = yr;
+    this.selectedMonth = now.getMonth();
+    this.selectedDay = now.getDate();
 
-    // 2. Event Listeners para sa Enable Sound ug Test Alarm
-    this.btnEnableSound.addEventListener("click", () => this.unlockiOSAudio(true));
-    this.btnTestAlarm.addEventListener("click", () => this.triggerTestAlarm());
+    this.cacheDOM();
+    this.populateYearAndMonthDropdowns();
+    this.bindEvents();
+    this.syncUI();
 
-    // 3. Banner Controls (Stop, Snooze, Done)
-    document.getElementById("btn-stop-alarm").addEventListener("click", () => {
-      this.stopAlarm();
+    // Initialize Alarm Engine
+    if (window.AlarmEngine) {
+      window.AlarmEngine.init();
+    }
+  },
+
+  cacheDOM() {
+    this.selectMonth = document.getElementById("select-month");
+    this.selectDay = document.getElementById("select-day");
+    this.selectYear = document.getElementById("select-year");
+    this.weekStrip = document.getElementById("week-strip");
+    this.selectedDayName = document.getElementById("selected-day-name");
+    this.selectedFullDate = document.getElementById("selected-full-date");
+    this.progressBadge = document.getElementById("agenda-progress-badge");
+    this.formAdd = document.getElementById("form-add-agenda");
+    this.inputTitle = document.getElementById("input-agenda-title");
+    this.inputTime = document.getElementById("input-agenda-time");
+    this.inputPriority = document.getElementById("input-agenda-priority");
+    this.listContainer = document.getElementById("agenda-list-container");
+  },
+
+  populateYearAndMonthDropdowns() {
+    // Months
+    this.selectMonth.innerHTML = MONTHS.map(
+      (m, idx) => `<option value="${idx}">${m}</option>`
+    ).join("");
+
+    // Years (2026 to 2040)
+    let yearOptions = "";
+    for (let y = MIN_YEAR; y <= MAX_YEAR; y++) {
+      yearOptions += `<option value="${y}">${y}</option>`;
+    }
+    this.selectYear.innerHTML = yearOptions;
+  },
+
+  populateDayDropdown() {
+    const daysInMonth = new Date(this.selectedYear, this.selectedMonth + 1, 0).getDate();
+    if (this.selectedDay > daysInMonth) {
+      this.selectedDay = daysInMonth;
+    }
+
+    let dayOptions = "";
+    for (let d = 1; d <= daysInMonth; d++) {
+      dayOptions += `<option value="${d}">${d}</option>`;
+    }
+    this.selectDay.innerHTML = dayOptions;
+    this.selectDay.value = this.selectedDay;
+  },
+
+  bindEvents() {
+    this.selectMonth.addEventListener("change", (e) => {
+      this.selectedMonth = parseInt(e.target.value, 10);
+      this.syncUI();
     });
 
-    document.getElementById("btn-snooze-alarm").addEventListener("click", () => {
-      this.snoozeActiveAlarm(5);
+    this.selectDay.addEventListener("change", (e) => {
+      this.selectedDay = parseInt(e.target.value, 10);
+      this.syncUI();
     });
 
-    document.getElementById("btn-done-alarm").addEventListener("click", () => {
-      if (this.activeAgendaId && window.AgendaApp) {
-        window.AgendaApp.markAgendaDoneFromAlarm(this.activeAgendaId);
-      }
-      this.stopAlarm();
+    this.selectYear.addEventListener("change", (e) => {
+      this.selectedYear = parseInt(e.target.value, 10);
+      this.syncUI();
     });
 
-    // 4. Start 1-Second Real-Time Clock & Agenda Time Matcher
-    this.startClockLoop();
-  },
-
-  /**
-   * Mag-himo og 1-second High-Volume Dual-Tone Digital Alarm WAV (Base64 Data URI)
-   * Kini mo-gana sa iOS Home Screen PWA bisan mo-fail ang WebAudio Oscillator
-   */
-  createAlarmWavDataUri() {
-    const sampleRate = 22050;
-    const durationSeconds = 1.0;
-    const numSamples = sampleRate * durationSeconds;
-    const buffer = new ArrayBuffer(44 + numSamples * 2);
-    const view = new DataView(buffer);
-
-    const writeString = (offset, str) => {
-      for (let i = 0; i < str.length; i++) {
-        view.setUint8(offset + i, str.charCodeAt(i));
-      }
-    };
-
-    // WAV Header
-    writeString(0, "RIFF");
-    view.setUint32(4, 36 + numSamples * 2, true);
-    writeString(8, "WAVE");
-    writeString(12, "fmt ");
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true); // PCM
-    view.setUint16(22, 1, true); // Mono
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate * 2, true);
-    view.setUint16(32, 2, true);
-    view.setUint16(34, 16, true);
-    writeString(36, "data");
-    view.setUint32(40, numSamples * 2, true);
-
-    // Classic "BEEP-BEEP-BEEP" Digital Alarm Pattern (880Hz & 1320Hz)
-    for (let i = 0; i < numSamples; i++) {
-      const t = i / sampleRate;
-      // 3 fast beeps in first 0.6s, pause in 0.6s - 1.0s
-      const inBeep1 = t >= 0.0 && t < 0.14;
-      const inBeep2 = t >= 0.2 && t < 0.34;
-      const inBeep3 = t >= 0.4 && t < 0.58;
-
-      let sample = 0;
-      if (inBeep1 || inBeep2 || inBeep3) {
-        const freq = inBeep3 ? 1320 : 980;
-        sample = Math.sin(2 * Math.PI * freq * t) > 0 ? 0.85 : -0.85; // Square wave para kusog sa speaker
-      }
-      view.setInt16(44 + i * 2, sample * 32767, true);
-    }
-
-    const bytes = new Uint8Array(buffer);
-    let binary = "";
-    for (let i = 0; i < bytes.byteLength; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    return "data:audio/wav;base64," + btoa(binary);
-  },
-
-  /**
-   * Unlock iOS Safari / PWA Audio directly inside a user tap event
-   */
-  unlockiOSAudio(playConfirmationBeep = false) {
-    try {
-      // Bypass iOS Silent Switch on iOS 16.4 / 17+
-      if (navigator.audioSession) {
-        navigator.audioSession.type = "playback";
-      }
-
-      // Initialize Web Audio Context as secondary engine
-      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-      if (!this.audioCtx && AudioContextClass) {
-        this.audioCtx = new AudioContextClass();
-      }
-      if (this.audioCtx && this.audioCtx.state === "suspended") {
-        this.audioCtx.resume();
-      }
-
-      // Unlock HTML5 <audio> element
-      this.audioEl.volume = 1.0;
-      this.audioEl.muted = false;
-
-      if (playConfirmationBeep) {
-        this.playWebAudioChime();
-        // Play brief snippet of the HTML5 audio to unlock it on iOS
-        this.audioEl.currentTime = 0;
-        this.audioEl.play().then(() => {
-          setTimeout(() => {
-            if (!this.isRinging) {
-              this.audioEl.pause();
-              this.audioEl.currentTime = 0;
-            }
-          }, 350);
-        }).catch((err) => console.warn("Audio unlock notice:", err));
-      }
-
-      this.soundEnabled = true;
-      this.btnEnableSound.textContent = "✅ Sound Ready (On)";
-      this.btnEnableSound.className =
-        "flex-1 py-2 px-3 rounded-xl text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 transition active:scale-95";
-    } catch (e) {
-      console.error("iOS Audio Unlock Error:", e);
-    }
-  },
-
-  /**
-   * Backup WebAudio Chime
-   */
-  playWebAudioChime() {
-    if (!this.audioCtx) return;
-    try {
-      const now = this.audioCtx.currentTime;
-      const osc = this.audioCtx.createOscillator();
-      const gain = this.audioCtx.createGain();
-      osc.type = "triangle";
-      osc.frequency.setValueAtTime(880, now);
-      osc.frequency.setValueAtTime(1320, now + 0.12);
-      gain.gain.setValueAtTime(0.5, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
-      osc.connect(gain);
-      gain.connect(this.audioCtx.destination);
-      osc.start(now);
-      osc.stop(now + 0.35);
-    } catch (err) {
-      console.warn(err);
-    }
-  },
-
-  /**
-   * Test Alarm Button Handler
-   */
-  triggerTestAlarm() {
-    this.unlockiOSAudio(false);
-    this.startAlarm({
-      id: "TEST_ALARM",
-      title: "Test Alarm & Ringing Bell 🔔",
-      time: "KARON MISMO (Test Mode)"
-    });
-  },
-
-  /**
-   * Start Ringing the Giant Bell, Row Bell, and Phone Audio
-   */
-  startAlarm(agendaItem) {
-    this.isRinging = true;
-    this.activeAgendaId = agendaItem.id;
-
-    // 1. Pa-uyogon ug pa-sigahon ang Dako nga Bell Icon sa ibabaw
-    this.giantBellSvg.classList.add("bell-ringing");
-    this.giantBellBox.classList.add("alarm-box-active");
-    this.giantBellPulse.classList.remove("hidden");
-    this.bellStateText.textContent = "RINGING!";
-    this.bellStateText.className = "text-[10px] font-black uppercase tracking-wider text-amber-300 mt-1 animate-bounce";
-
-    // 2. Ipakita ang Active Alarm Banner
-    this.bannerTitle.textContent = agendaItem.title;
-    this.bannerTime.textContent = `Oras: ${this.formatTime12Hour(agendaItem.time)}`;
-    this.banner.classList.remove("hidden");
-
-    // 3. I-refresh ang Agenda List aron ang Bell Icon sa kilid sa maong agenda mo-ring sab
-    if (window.AgendaApp) {
-      window.AgendaApp.renderAgendas();
-    }
-
-    // 4. Patukaron ang HTML5 WAV Loop + WebAudio Oscillator Loop
-    this.audioEl.currentTime = 0;
-    this.audioEl.play().catch((e) => {
-      console.warn("Autoplay blocked until user taps Enable Sound:", e);
-    });
-
-    if (this.beepInterval) clearInterval(this.beepInterval);
-    this.playWebAudioChime();
-    this.beepInterval = setInterval(() => {
-      if (this.isRinging) {
-        this.playWebAudioChime();
-      }
-    }, 1000);
-  },
-
-  /**
-   * Stop Alarm Sound & Bell Animation
-   */
-  stopAlarm() {
-    this.isRinging = false;
-    this.activeAgendaId = null;
-
-    // Stop HTML5 Audio
-    this.audioEl.pause();
-    this.audioEl.currentTime = 0;
-
-    // Stop WebAudio Loop
-    if (this.beepInterval) {
-      clearInterval(this.beepInterval);
-      this.beepInterval = null;
-    }
-
-    // Stop Giant Bell Animation
-    this.giantBellSvg.classList.remove("bell-ringing");
-    this.giantBellBox.classList.remove("alarm-box-active");
-    this.giantBellPulse.classList.add("hidden");
-    this.bellStateText.textContent = "Standby";
-    this.bellStateText.className = "text-[10px] font-bold uppercase tracking-wider text-slate-400 mt-1";
-
-    // Hide Alarm Banner
-    this.banner.classList.add("hidden");
-
-    if (window.AgendaApp) {
-      window.AgendaApp.renderAgendas();
-    }
-  },
-
-  /**
-   * Snooze Active Alarm by +5 Minutes
-   */
-  snoozeActiveAlarm(minutes = 5) {
-    if (this.activeAgendaId && this.activeAgendaId !== "TEST_ALARM" && window.AgendaApp) {
-      window.AgendaApp.snoozeAgendaItem(this.activeAgendaId, minutes);
-    }
-    this.stopAlarm();
-  },
-
-  /**
-   * 1-Second Loop: Updates Live Clock & Checks if Any Agenda Matches Current Time
-   */
-  startClockLoop() {
-    const tick = () => {
+    document.getElementById("btn-jump-today").addEventListener("click", () => {
       const now = new Date();
+      this.selectedYear = Math.min(Math.max(now.getFullYear(), MIN_YEAR), MAX_YEAR);
+      this.selectedMonth = now.getMonth();
+      this.selectedDay = now.getDate();
+      this.syncUI();
+    });
 
-      // Update Live Clock Display
-      const clockEl = document.getElementById("live-clock");
-      const todayLabelEl = document.getElementById("live-today-label");
-      if (clockEl) {
-        clockEl.textContent = now.toLocaleTimeString("en-US", {
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-          hour12: true
-        });
+    // Add New Agenda Form Submit
+    this.formAdd.addEventListener("submit", (e) => {
+      e.preventDefault();
+      // Unlock audio automatically when user interacts with form
+      if (window.AlarmEngine && !window.AlarmEngine.soundEnabled) {
+        window.AlarmEngine.unlockiOSAudio(false);
       }
-      if (todayLabelEl) {
-        todayLabelEl.textContent = now.toLocaleDateString("en-US", {
-          weekday: "long",
-          month: "short",
-          day: "numeric",
-          year: "numeric"
-        });
-      }
+      this.addAgenda();
+    });
 
-      // Check Agenda Alarms for Today's Date & Current HH:MM
-      if (window.AgendaApp) {
-        const todayKey = window.AgendaApp.formatDateKey(
-          now.getFullYear(),
-          now.getMonth(),
-          now.getDate()
-        );
-        const currentHH = String(now.getHours()).padStart(2, "0");
-        const currentMM = String(now.getMinutes()).padStart(2, "0");
-        const currentHHMM = `${currentHH}:${currentMM}`;
-
-        const todaysAgendas = window.AgendaApp.getAgendasForDate(todayKey);
-        todaysAgendas.forEach((item) => {
-          if (!item.done && item.time && item.time === currentHHMM) {
-            const uniqueTriggerKey = `${todayKey}_${item.id}_${item.time}`;
-            if (!this.triggeredKeys.has(uniqueTriggerKey)) {
-              this.triggeredKeys.add(uniqueTriggerKey);
-              this.startAlarm(item);
-            }
-          }
-        });
-      }
-    };
-
-    tick();
-    setInterval(tick, 1000);
+    // Filter Buttons
+    document.getElementById("filter-all").addEventListener("click", () => this.setFilter("all"));
+    document.getElementById("filter-pending").addEventListener("click", () => this.setFilter("pending"));
+    document.getElementById("filter-done").addEventListener("click", () => this.setFilter("done"));
   },
 
-  formatTime12Hour(time24) {
-    if (!time24 || !time24.includes(":")) return time24 || "";
-    const [hStr, mStr] = time24.split(":");
-    let h = parseInt(hStr, 10);
-    const ampm = h >= 12 ? "PM" : "AM";
-    h = h % 12 || 12;
-    return `${h}:${mStr} ${ampm}`;
+  setFilter(filterType) {
+    this.currentFilter = filterType;
+    ["all", "pending", "done"].forEach((f) => {
+      const btn = document.getElementById(`filter-${f}`);
+      if (f === filterType) {
+        btn.className = "text-[11px] px-2.5 py-1 rounded-lg font-bold bg-indigo-600 text-white";
+      } else {
+        btn.className = "text-[11px] px-2.5 py-1 rounded-lg font-bold bg-slate-800 text-slate-400";
+      }
+    });
+    this.renderAgendas();
+  },
+
+  syncUI() {
+    this.selectMonth.value = this.selectedMonth;
+    this.selectYear.value = this.selectedYear;
+    this.populateDayDropdown();
+
+    const currentObj = new Date(this.selectedYear, this.selectedMonth, this.selectedDay);
+    const dayName = currentObj.toLocaleDateString("en-US", { weekday: "long" });
+
+    this.selectedDayName.textContent = dayName.toUpperCase();
+    this.selectedFullDate.textContent = `${MONTHS[this.selectedMonth]} ${this.selectedDay}, ${this.selectedYear}`;
+
+    this.renderWeekStrip(currentObj);
+    this.renderAgendas();
+  },
+
+  /**
+   * Renders the Monday - Sunday Selector Strip for the currently selected week
+   */
+  renderWeekStrip(selectedDateObj) {
+    const jsDay = selectedDateObj.getDay(); // 0 (Sun) to 6 (Sat)
+    const diffToMonday = jsDay === 0 ? -6 : 1 - jsDay;
+    const mondayDate = new Date(selectedDateObj);
+    mondayDate.setDate(selectedDateObj.getDate() + diffToMonday);
+
+    this.weekStrip.innerHTML = "";
+
+    for (let i = 0; i < 7; i++) {
+      const cellDate = new Date(mondayDate);
+      cellDate.setDate(mondayDate.getDate() + i);
+
+      const cYear = cellDate.getFullYear();
+      const cMonth = cellDate.getMonth();
+      const cDay = cellDate.getDate();
+      const dateKey = this.formatDateKey(cYear, cMonth, cDay);
+      const dayAgendas = this.getAgendasForDate(dateKey);
+
+      const isSelected =
+        cYear === this.selectedYear &&
+        cMonth === this.selectedMonth &&
+        cDay === this.selectedDay;
+
+      // Dot color indicator if date has agendas
+      let dotHTML = "";
+      if (dayAgendas.length > 0) {
+        const allDone = dayAgendas.every((a) => a.done);
+        const dotColor = allDone ? "bg-emerald-400" : "bg-amber-400";
+        dotHTML = `<span class="w-1.5 h-1.5 rounded-full ${dotColor} mt-1"></span>`;
+      } else {
+        dotHTML = `<span class="w-1.5 h-1.5 mt-1"></span>`;
+      }
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = isSelected
+        ? "flex flex-col items-center py-2 rounded-2xl bg-indigo-600 text-white font-bold shadow-lg border border-indigo-400 transition"
+        : "flex flex-col items-center py-2 rounded-2xl bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 transition";
+
+      btn.innerHTML = `
+        <span class="text-[10px] uppercase opacity-80">${WEEKDAYS_MON_FIRST[i].short}</span>
+        <span class="text-sm font-extrabold mt-0.5">${cDay}</span>
+        ${dotHTML}
+      `;
+
+      btn.addEventListener("click", () => {
+        if (cYear >= MIN_YEAR && cYear <= MAX_YEAR) {
+          this.selectedYear = cYear;
+          this.selectedMonth = cMonth;
+          this.selectedDay = cDay;
+          this.syncUI();
+        }
+      });
+
+      this.weekStrip.appendChild(btn);
+    }
+  },
+
+  formatDateKey(year, monthIndex, day) {
+    const m = String(monthIndex + 1).padStart(2, "0");
+    const d = String(day).padStart(2, "0");
+    return `${year}-${m}-${d}`;
+  },
+
+  getSelectedDateKey() {
+    return this.formatDateKey(this.selectedYear, this.selectedMonth, this.selectedDay);
+  },
+
+  getAgendasForDate(dateKey) {
+    return this.allData[dateKey] || [];
+  },
+
+  addAgenda() {
+    const title = this.inputTitle.value.trim();
+    const time = this.inputTime.value;
+    const priority = this.inputPriority.value;
+
+    if (!title) return;
+
+    const dateKey = this.getSelectedDateKey();
+    if (!this.allData[dateKey]) {
+      this.allData[dateKey] = [];
+    }
+
+    this.allData[dateKey].push({
+      id: "ag_" + Date.now(),
+      title,
+      time: time || "",
+      priority,
+      done: false
+    });
+
+    // Sort by time if time is set
+    this.allData[dateKey].sort((a, b) => (a.time || "99:99").localeCompare(b.time || "99:99"));
+
+    this.saveToStorage();
+    this.inputTitle.value = "";
+    this.inputTime.value = "";
+    this.inputPriority.value = "normal";
+    this.syncUI();
+  },
+
+  toggleDone(agendaId) {
+    const dateKey = this.getSelectedDateKey();
+    const list = this.allData[dateKey] || [];
+    const target = list.find((item) => item.id === agendaId);
+    if (target) {
+      target.done = !target.done;
+      if (target.done && window.AlarmEngine && window.AlarmEngine.activeAgendaId === agendaId) {
+        window.AlarmEngine.stopAlarm();
+      }
+      this.saveToStorage();
+      this.syncUI();
+    }
+  },
+
+  markAgendaDoneFromAlarm(agendaId) {
+    Object.keys(this.allData).forEach((dateKey) => {
+      const item = this.allData[dateKey].find((a) => a.id === agendaId);
+      if (item) {
+        item.done = true;
+      }
+    });
+    this.saveToStorage();
+    this.syncUI();
+  },
+
+  snoozeAgendaItem(agendaId, minutesToAdd = 5) {
+    const now = new Date();
+    now.setMinutes(now.getMinutes() + minutesToAdd);
+    const newHH = String(now.getHours()).padStart(2, "0");
+    const newMM = String(now.getMinutes()).padStart(2, "0");
+    const newTime = `${newHH}:${newMM}`;
+
+    Object.keys(this.allData).forEach((dateKey) => {
+      const item = this.allData[dateKey].find((a) => a.id === agendaId);
+      if (item) {
+        item.time = newTime;
+      }
+    });
+    this.saveToStorage();
+    this.syncUI();
+  },
+
+  deleteAgenda(agendaId) {
+    const dateKey = this.getSelectedDateKey();
+    if (!this.allData[dateKey]) return;
+    this.allData[dateKey] = this.allData[dateKey].filter((item) => item.id !== agendaId);
+    if (window.AlarmEngine && window.AlarmEngine.activeAgendaId === agendaId) {
+      window.AlarmEngine.stopAlarm();
+    }
+    this.saveToStorage();
+    this.syncUI();
+  },
+
+  renderAgendas() {
+    const dateKey = this.getSelectedDateKey();
+    const rawList = this.getAgendasForDate(dateKey);
+
+    // Update Progress Badge
+    const doneCount = rawList.filter((a) => a.done).length;
+    this.progressBadge.textContent = `${doneCount} / ${rawList.length} Done`;
+
+    // Apply Filter
+    const filtered = rawList.filter((item) => {
+      if (this.currentFilter === "pending") return !item.done;
+      if (this.currentFilter === "done") return item.done;
+      return true;
+    });
+
+    this.listContainer.innerHTML = "";
+
+    if (filtered.length === 0) {
+      this.listContainer.innerHTML = `
+        <div class="text-center py-8 px-4 rounded-2xl bg-slate-900/50 border border-dashed border-slate-800">
+          <p class="text-sm text-slate-400 font-semibold">Walay naka-lista nga agenda.</p>
+          <p class="text-xs text-slate-500 mt-1">Pag-dugang og agenda sa ibabaw para niining adlawa!</p>
+        </div>
+      `;
+      return;
+    }
+
+    filtered.forEach((item) => {
+      const isThisItemRinging =
+        window.AlarmEngine &&
+        window.AlarmEngine.isRinging &&
+        window.AlarmEngine.activeAgendaId === item.id;
+
+      const priorityColors = {
+        normal: "bg-slate-800 text-slate-300",
+        important: "bg-amber-500/20 text-amber-300 border border-amber-500/30",
+        urgent: "bg-rose-500/20 text-rose-300 border border-rose-500/30"
+      };
+
+      const row = document.createElement("div");
+      row.className = `flex items-center justify-between gap-3 p-3.5 rounded-2xl border transition ${
+        isThisItemRinging
+          ? "alarm-box-active"
+          : item.done
+          ? "bg-slate-900/40 border-slate-800/60 opacity-60"
+          : "bg-slate-900 border-slate-800"
+      }`;
+
+      // Left Checkbox + Details
+      const leftDiv = document.createElement("div");
+      leftDiv.className = "flex items-center gap-3 flex-1 cursor-pointer";
+      leftDiv.addEventListener("click", () => this.toggleDone(item.id));
+
+      const checkCircle = `
+        <div class="w-6 h-6 rounded-lg flex items-center justify-center border-2 transition ${
+          item.done
+            ? "bg-emerald-500 border-emerald-500 text-slate-950 font-black"
+            : "border-slate-600 bg-slate-950"
+        }">
+          ${item.done ? "✓" : ""}
+        </div>
+      `;
+
+      const timeBadge = item.time
+        ? `<span class="inline-flex items-center gap-1 text-[11px] font-mono font-bold px-2 py-0.5 rounded-md ${
+            isThisItemRinging
+              ? "bg-amber-400 text-slate-950"
+              : "bg-indigo-500/20 text-indigo-300"
+          }">
+            ⏰ ${window.AlarmEngine ? window.AlarmEngine.formatTime12Hour(item.time) : item.time}
+          </span>`
+        : "";
+
+      leftDiv.innerHTML = `
+        ${checkCircle}
+        <div class="flex-1">
+          <p class="text-sm font-bold ${item.done ? "line-through text-slate-500" : "text-white"}">
+            ${this.escapeHTML(item.title)}
+          </p>
+          <div class="flex flex-wrap items-center gap-1.5 mt-1">
+            ${timeBadge}
+            <span class="text-[10px] font-bold uppercase px-2 py-0.5 rounded-md ${
+              priorityColors[item.priority] || priorityColors.normal
+            }">
+              ${item.priority}
+            </span>
+          </div>
+        </div>
+      `;
+
+      // Right Side: Per-Item Bell Icon + Delete Button
+      const rightDiv = document.createElement("div");
+      rightDiv.className = "flex items-center gap-2";
+
+      if (item.time) {
+        const bellIndicator = document.createElement("div");
+        bellIndicator.className = `w-9 h-9 rounded-xl flex items-center justify-center border ${
+          isThisItemRinging
+            ? "bg-rose-600/30 border-amber-400"
+            : "bg-slate-950 border-slate-800"
+        }`;
+        bellIndicator.innerHTML = `
+          <span class="text-lg ${isThisItemRinging ? "bell-ringing" : "opacity-75"}">
+            🔔
+          </span>
+        `;
+        rightDiv.appendChild(bellIndicator);
+      }
+
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className =
+        "w-8 h-8 rounded-xl bg-slate-950 hover:bg-rose-500/20 text-slate-500 hover:text-rose-400 border border-slate-800 flex items-center justify-center text-xs font-bold";
+      delBtn.textContent = "✕";
+      delBtn.addEventListener("click", () => this.deleteAgenda(item.id));
+      rightDiv.appendChild(delBtn);
+
+      row.appendChild(leftDiv);
+      row.appendChild(rightDiv);
+      this.listContainer.appendChild(row);
+    });
+  },
+
+  loadFromStorage() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      this.allData = raw ? JSON.parse(raw) : {};
+    } catch (e) {
+      console.error("Failed to read localStorage:", e);
+      this.allData = {};
+    }
+  },
+
+  saveToStorage() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.allData));
+    } catch (e) {
+      console.error("Failed to save localStorage:", e);
+    }
+  },
+
+  escapeHTML(str) {
+    return str.replace(/[&<>"']/g, (m) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;"
+    }[m]));
   }
 };
 
-window.AlarmEngine = AlarmEngine;
+window.AgendaApp = AgendaApp;
+document.addEventListener("DOMContentLoaded", () => AgendaApp.init());
