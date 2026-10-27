@@ -1,1922 +1,475 @@
-<!DOCTYPE html>
-<html lang="en" class="dark">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    
-    <!-- iOS PWA Meta Tags for App-Like Experience on iPhone -->
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="Agenda Ko">
-    <meta name="theme-color" content="#0f0e1a">
-    
-    <title>Agenda Ko • 2026–2040 Personal Planner</title>
-    
-    <!-- Google Fonts: Inter -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    
-    <!-- Tailwind CSS CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            darkMode: 'class',
-            theme: {
-                extend: {
-                    fontFamily: {
-                        sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
-                    },
-                    colors: {
-                        ios: {
-                            bg: '#0f0e1a',
-                            card: '#1c1b2e',
-                            cardLight: '#25233d',
-                            border: '#312e4f',
-                            accent: '#7c3aed',
-                            accentBlue: '#3b82f6',
-                            mint: '#10b981',
-                        }
-                    }
-                }
-            }
+/**
+ * app.js
+ * Main Application Logic: Date Selector (2026-2040), Monday-Sunday Strip, & LocalStorage CRUD
+ */
+
+const STORAGE_KEY = "agenda_ko_data_v2";
+const MIN_YEAR = 2026;
+const MAX_YEAR = 2040;
+
+const MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December"
+];
+
+const WEEKDAYS_MON_FIRST = [
+  { short: "Mon", full: "Monday", jsDay: 1 },
+  { short: "Tue", full: "Tuesday", jsDay: 2 },
+  { short: "Wed", full: "Wednesday", jsDay: 3 },
+  { short: "Thu", full: "Thursday", jsDay: 4 },
+  { short: "Fri", full: "Friday", jsDay: 5 },
+  { short: "Sat", full: "Saturday", jsDay: 6 },
+  { short: "Sun", full: "Sunday", jsDay: 0 }
+];
+
+const AgendaApp = {
+  selectedYear: 2026,
+  selectedMonth: 0, // 0 = Jan
+  selectedDay: 1,
+  currentFilter: "all", // 'all' | 'pending' | 'done'
+  allData: {}, // { "YYYY-MM-DD": [ { id, title, time, priority, done } ] }
+
+  init() {
+    this.loadFromStorage();
+
+    // Set initial date to Today (clamped between 2026 and 2040)
+    const now = new Date();
+    const yr = Math.min(Math.max(now.getFullYear(), MIN_YEAR), MAX_YEAR);
+    this.selectedYear = yr;
+    this.selectedMonth = now.getMonth();
+    this.selectedDay = now.getDate();
+
+    this.cacheDOM();
+    this.populateYearAndMonthDropdowns();
+    this.bindEvents();
+    this.syncUI();
+
+    // Initialize Alarm Engine
+    if (window.AlarmEngine) {
+      window.AlarmEngine.init();
+    }
+  },
+
+  cacheDOM() {
+    this.selectMonth = document.getElementById("select-month");
+    this.selectDay = document.getElementById("select-day");
+    this.selectYear = document.getElementById("select-year");
+    this.weekStrip = document.getElementById("week-strip");
+    this.selectedDayName = document.getElementById("selected-day-name");
+    this.selectedFullDate = document.getElementById("selected-full-date");
+    this.progressBadge = document.getElementById("agenda-progress-badge");
+    this.formAdd = document.getElementById("form-add-agenda");
+    this.inputTitle = document.getElementById("input-agenda-title");
+    this.inputTime = document.getElementById("input-agenda-time");
+    this.inputPriority = document.getElementById("input-agenda-priority");
+    this.listContainer = document.getElementById("agenda-list-container");
+  },
+
+  populateYearAndMonthDropdowns() {
+    // Months
+    this.selectMonth.innerHTML = MONTHS.map(
+      (m, idx) => `<option value="${idx}">${m}</option>`
+    ).join("");
+
+    // Years (2026 to 2040)
+    let yearOptions = "";
+    for (let y = MIN_YEAR; y <= MAX_YEAR; y++) {
+      yearOptions += `<option value="${y}">${y}</option>`;
+    }
+    this.selectYear.innerHTML = yearOptions;
+  },
+
+  populateDayDropdown() {
+    const daysInMonth = new Date(this.selectedYear, this.selectedMonth + 1, 0).getDate();
+    if (this.selectedDay > daysInMonth) {
+      this.selectedDay = daysInMonth;
+    }
+
+    let dayOptions = "";
+    for (let d = 1; d <= daysInMonth; d++) {
+      dayOptions += `<option value="${d}">${d}</option>`;
+    }
+    this.selectDay.innerHTML = dayOptions;
+    this.selectDay.value = this.selectedDay;
+  },
+
+  bindEvents() {
+    this.selectMonth.addEventListener("change", (e) => {
+      this.selectedMonth = parseInt(e.target.value, 10);
+      this.syncUI();
+    });
+
+    this.selectDay.addEventListener("change", (e) => {
+      this.selectedDay = parseInt(e.target.value, 10);
+      this.syncUI();
+    });
+
+    this.selectYear.addEventListener("change", (e) => {
+      this.selectedYear = parseInt(e.target.value, 10);
+      this.syncUI();
+    });
+
+    document.getElementById("btn-jump-today").addEventListener("click", () => {
+      const now = new Date();
+      this.selectedYear = Math.min(Math.max(now.getFullYear(), MIN_YEAR), MAX_YEAR);
+      this.selectedMonth = now.getMonth();
+      this.selectedDay = now.getDate();
+      this.syncUI();
+    });
+
+    // Add New Agenda Form Submit
+    this.formAdd.addEventListener("submit", (e) => {
+      e.preventDefault();
+      // Unlock audio automatically when user interacts with form
+      if (window.AlarmEngine && !window.AlarmEngine.soundEnabled) {
+        window.AlarmEngine.unlockiOSAudio(false);
+      }
+      this.addAgenda();
+    });
+
+    // Filter Buttons
+    document.getElementById("filter-all").addEventListener("click", () => this.setFilter("all"));
+    document.getElementById("filter-pending").addEventListener("click", () => this.setFilter("pending"));
+    document.getElementById("filter-done").addEventListener("click", () => this.setFilter("done"));
+  },
+
+  setFilter(filterType) {
+    this.currentFilter = filterType;
+    ["all", "pending", "done"].forEach((f) => {
+      const btn = document.getElementById(`filter-${f}`);
+      if (f === filterType) {
+        btn.className = "text-[11px] px-2.5 py-1 rounded-lg font-bold bg-indigo-600 text-white";
+      } else {
+        btn.className = "text-[11px] px-2.5 py-1 rounded-lg font-bold bg-slate-800 text-slate-400";
+      }
+    });
+    this.renderAgendas();
+  },
+
+  syncUI() {
+    this.selectMonth.value = this.selectedMonth;
+    this.selectYear.value = this.selectedYear;
+    this.populateDayDropdown();
+
+    const currentObj = new Date(this.selectedYear, this.selectedMonth, this.selectedDay);
+    const dayName = currentObj.toLocaleDateString("en-US", { weekday: "long" });
+
+    this.selectedDayName.textContent = dayName.toUpperCase();
+    this.selectedFullDate.textContent = `${MONTHS[this.selectedMonth]} ${this.selectedDay}, ${this.selectedYear}`;
+
+    this.renderWeekStrip(currentObj);
+    this.renderAgendas();
+  },
+
+  /**
+   * Renders the Monday - Sunday Selector Strip for the currently selected week
+   */
+  renderWeekStrip(selectedDateObj) {
+    const jsDay = selectedDateObj.getDay(); // 0 (Sun) to 6 (Sat)
+    const diffToMonday = jsDay === 0 ? -6 : 1 - jsDay;
+    const mondayDate = new Date(selectedDateObj);
+    mondayDate.setDate(selectedDateObj.getDate() + diffToMonday);
+
+    this.weekStrip.innerHTML = "";
+
+    for (let i = 0; i < 7; i++) {
+      const cellDate = new Date(mondayDate);
+      cellDate.setDate(mondayDate.getDate() + i);
+
+      const cYear = cellDate.getFullYear();
+      const cMonth = cellDate.getMonth();
+      const cDay = cellDate.getDate();
+      const dateKey = this.formatDateKey(cYear, cMonth, cDay);
+      const dayAgendas = this.getAgendasForDate(dateKey);
+
+      const isSelected =
+        cYear === this.selectedYear &&
+        cMonth === this.selectedMonth &&
+        cDay === this.selectedDay;
+
+      // Dot color indicator if date has agendas
+      let dotHTML = "";
+      if (dayAgendas.length > 0) {
+        const allDone = dayAgendas.every((a) => a.done);
+        const dotColor = allDone ? "bg-emerald-400" : "bg-amber-400";
+        dotHTML = `<span class="w-1.5 h-1.5 rounded-full ${dotColor} mt-1"></span>`;
+      } else {
+        dotHTML = `<span class="w-1.5 h-1.5 mt-1"></span>`;
+      }
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = isSelected
+        ? "flex flex-col items-center py-2 rounded-2xl bg-indigo-600 text-white font-bold shadow-lg border border-indigo-400 transition"
+        : "flex flex-col items-center py-2 rounded-2xl bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 transition";
+
+      btn.innerHTML = `
+        <span class="text-[10px] uppercase opacity-80">${WEEKDAYS_MON_FIRST[i].short}</span>
+        <span class="text-sm font-extrabold mt-0.5">${cDay}</span>
+        ${dotHTML}
+      `;
+
+      btn.addEventListener("click", () => {
+        if (cYear >= MIN_YEAR && cYear <= MAX_YEAR) {
+          this.selectedYear = cYear;
+          this.selectedMonth = cMonth;
+          this.selectedDay = cDay;
+          this.syncUI();
         }
-    </script>
+      });
 
-    <style>
-        /* Custom iOS Aesthetic & Safe Area Styling */
-        :root {
-            --safe-top: env(safe-area-inset-top, 16px);
-            --safe-bottom: env(safe-area-inset-bottom, 20px);
-        }
+      this.weekStrip.appendChild(btn);
+    }
+  },
 
-        body {
-            background-color: #0f0e1a;
-            background-image: 
-                radial-gradient(at 10% 10%, rgba(124, 58, 237, 0.18) 0px, transparent 50%),
-                radial-gradient(at 90% 15%, rgba(59, 130, 246, 0.15) 0px, transparent 50%),
-                radial-gradient(at 50% 95%, rgba(16, 185, 129, 0.08) 0px, transparent 50%);
-            background-attachment: fixed;
-            color: #f8fafc;
-            -webkit-tap-highlight-color: transparent;
-            user-select: none;
-            overflow-x: hidden;
-        }
+  formatDateKey(year, monthIndex, day) {
+    const m = String(monthIndex + 1).padStart(2, "0");
+    const d = String(day).padStart(2, "0");
+    return `${year}-${m}-${d}`;
+  },
 
-        /* Allow text selection inside inputs */
-        input, textarea, select {
-            user-select: text;
-        }
+  getSelectedDateKey() {
+    return this.formatDateKey(this.selectedYear, this.selectedMonth, this.selectedDay);
+  },
 
-        /* Glassmorphic Card Surface */
-        .ios-glass {
-            background: rgba(28, 27, 46, 0.82);
-            backdrop-filter: blur(20px);
-            -webkit-backdrop-filter: blur(20px);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-        }
+  getAgendasForDate(dateKey) {
+    return this.allData[dateKey] || [];
+  },
 
-        .ios-glass-strong {
-            background: rgba(22, 20, 38, 0.95);
-            backdrop-filter: blur(28px);
-            -webkit-backdrop-filter: blur(28px);
-            border-top: 1px solid rgba(255, 255, 255, 0.12);
-        }
+  addAgenda() {
+    const title = this.inputTitle.value.trim();
+    const time = this.inputTime.value;
+    const priority = this.inputPriority.value;
 
-        /* Custom Scrollbar Hiding for iOS Clean Look */
-        .no-scrollbar::-webkit-scrollbar {
-            display: none;
-        }
-        .no-scrollbar {
-            -ms-overflow-style: none;
-            scrollbar-width: none;
-        }
+    if (!title) return;
 
-        /* Checkbox Pop Animation */
-        @keyframes checkPop {
-            0% { transform: scale(0.8); }
-            50% { transform: scale(1.18); }
-            100% { transform: scale(1); }
-        }
-        .animate-check {
-            animation: checkPop 0.28s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
-        }
+    const dateKey = this.getSelectedDateKey();
+    if (!this.allData[dateKey]) {
+      this.allData[dateKey] = [];
+    }
 
-        /* Continuous Vigorous Bell Ringing Animation */
-        @keyframes bellRing {
-            0% { transform: rotate(0deg) scale(1); }
-            10% { transform: rotate(22deg) scale(1.12); }
-            20% { transform: rotate(-20deg) scale(1.12); }
-            30% { transform: rotate(18deg) scale(1.12); }
-            40% { transform: rotate(-16deg) scale(1.12); }
-            50% { transform: rotate(12deg) scale(1.08); }
-            60% { transform: rotate(-10deg) scale(1.08); }
-            70% { transform: rotate(6deg) scale(1.04); }
-            80% { transform: rotate(-4deg) scale(1.02); }
-            90% { transform: rotate(2deg) scale(1); }
-            100% { transform: rotate(0deg) scale(1); }
-        }
-        .animate-bell-ring {
-            animation: bellRing 0.85s ease-in-out infinite;
-            transform-origin: top center;
-        }
+    this.allData[dateKey].push({
+      id: "ag_" + Date.now(),
+      title,
+      time: time || "",
+      priority,
+      done: false
+    });
 
-        /* Pulsing Glow Ring for Active Alarm Bell */
-        @keyframes alarmPulseRing {
-            0% { transform: scale(0.92); box-shadow: 0 0 0 0 rgba(244, 63, 94, 0.75); }
-            70% { transform: scale(1); box-shadow: 0 0 0 14px rgba(244, 63, 94, 0); }
-            100% { transform: scale(0.92); box-shadow: 0 0 0 0 rgba(244, 63, 94, 0); }
-        }
-        .alarm-pulse-glow {
-            animation: alarmPulseRing 1.3s infinite;
-        }
+    // Sort by time if time is set
+    this.allData[dateKey].sort((a, b) => (a.time || "99:99").localeCompare(b.time || "99:99"));
 
-        /* Smooth Slide Up for Modals */
-        @keyframes slideUp {
-            from { transform: translateY(100%); opacity: 0.5; }
-            to { transform: translateY(0); opacity: 1; }
-        }
-        .modal-slide-up {
-            animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-        }
+    this.saveToStorage();
+    this.inputTitle.value = "";
+    this.inputTime.value = "";
+    this.inputPriority.value = "normal";
+    this.syncUI();
+  },
 
-        /* Custom Select Appearance for Dark iOS */
-        select {
-            appearance: none;
-            -webkit-appearance: none;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2394a3b8'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
-            background-repeat: no-repeat;
-            background-position: right 0.6rem center;
-            background-size: 1rem;
-        }
-    </style>
-</head>
-<body class="min-h-screen pb-32 antialiased selection:bg-violet-500 selection:text-white">
+  toggleDone(agendaId) {
+    const dateKey = this.getSelectedDateKey();
+    const list = this.allData[dateKey] || [];
+    const target = list.find((item) => item.id === agendaId);
+    if (target) {
+      target.done = !target.done;
+      if (target.done && window.AlarmEngine && window.AlarmEngine.activeAgendaId === agendaId) {
+        window.AlarmEngine.stopAlarm();
+      }
+      this.saveToStorage();
+      this.syncUI();
+    }
+  },
 
-    <!-- Main Mobile Container (Centered on larger screens, full width on iPhone) -->
-    <div class="max-w-md mx-auto min-h-screen flex flex-col px-4 pt-4 sm:pt-6 relative">
+  markAgendaDoneFromAlarm(agendaId) {
+    Object.keys(this.allData).forEach((dateKey) => {
+      const item = this.allData[dateKey].find((a) => a.id === agendaId);
+      if (item) {
+        item.done = true;
+      }
+    });
+    this.saveToStorage();
+    this.syncUI();
+  },
 
-        <!-- TOP APP BAR: App Logo + Title + Quick Action Buttons -->
-        <header class="flex items-center justify-between mb-4">
-            <div class="flex items-center gap-3">
-                <!-- Custom SVG App Icon matching the 3D Calendar Checkmark Logo -->
-                <div class="w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-600 via-violet-600 to-blue-600 p-0.5 shadow-lg shadow-violet-600/30 relative flex-shrink-0">
-                    <div class="w-full h-full bg-[#19172b] rounded-[14px] flex items-center justify-center relative overflow-hidden">
-                        <div class="absolute inset-0 bg-gradient-to-tr from-violet-600/20 to-cyan-400/20"></div>
-                        <svg class="w-7 h-7 relative z-10" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <!-- Calendar Base -->
-                            <rect x="4" y="6" width="22" height="22" rx="5" fill="#2A2744" stroke="url(#paint0_linear)" stroke-width="1.8"/>
-                            <!-- Calendar Top Header -->
-                            <path d="M4 11C4 8.23858 6.23858 6 9 6H21C23.7614 6 26 8.23858 26 11V12H4V11Z" fill="url(#paint1_linear)"/>
-                            <!-- Rings -->
-                            <rect x="9" y="3" width="2.5" height="5" rx="1.25" fill="#CBD5E1"/>
-                            <rect x="18.5" y="3" width="2.5" height="5" rx="1.25" fill="#CBD5E1"/>
-                            <!-- Mini Lines -->
-                            <rect x="8" y="16" width="6" height="2" rx="1" fill="#94A3B8"/>
-                            <rect x="8" y="21" width="5" height="2" rx="1" fill="#94A3B8"/>
-                            <!-- Glowing Mint Checkmark Badge -->
-                            <circle cx="22" cy="21" r="7" fill="#0F172A" stroke="#10B981" stroke-width="1.5"/>
-                            <path d="M18.5 21.2L20.8 23.5L25.5 18.5" stroke="#10B981" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
-                            <defs>
-                                <linearGradient id="paint0_linear" x1="4" y1="6" x2="26" y2="28" gradientUnits="userSpaceOnUse">
-                                    <stop stop-color="#60A5FA"/>
-                                    <stop offset="1" stop-color="#A855F7"/>
-                                </linearGradient>
-                                <linearGradient id="paint1_linear" x1="4" y1="6" x2="26" y2="12" gradientUnits="userSpaceOnUse">
-                                    <stop stop-color="#3B82F6"/>
-                                    <stop offset="1" stop-color="#9333EA"/>
-                                </linearGradient>
-                            </defs>
-                        </svg>
-                    </div>
-                </div>
-                <div>
-                    <div class="flex items-center gap-2">
-                        <h1 class="text-xl font-extrabold tracking-tight bg-gradient-to-r from-white via-slate-100 to-violet-200 bg-clip-text text-transparent">Agenda Ko</h1>
-                        <span class="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/30">2026–2040</span>
-                    </div>
-                    <p class="text-xs text-slate-400">Personal iOS Task & Date Planner</p>
-                </div>
-            </div>
+  snoozeAgendaItem(agendaId, minutesToAdd = 5) {
+    const now = new Date();
+    now.setMinutes(now.getMinutes() + minutesToAdd);
+    const newHH = String(now.getHours()).padStart(2, "0");
+    const newMM = String(now.getMinutes()).padStart(2, "0");
+    const newTime = `${newHH}:${newMM}`;
 
-            <!-- Action Buttons: All Scheduled Dates & Backup/Guide -->
-            <div class="flex items-center gap-2">
-                <button onclick="openAllDatesModal()" title="View All Dates with Agendas" class="ios-glass p-2.5 rounded-xl text-slate-200 hover:text-white active:scale-95 transition relative">
-                    <svg class="w-5 h-5 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
-                    </svg>
-                    <span id="totalScheduledBadge" class="hidden absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-emerald-500 text-[#0f0e1a] text-[10px] font-extrabold flex items-center justify-center shadow">0</span>
-                </button>
-                <button onclick="openSettingsModal()" title="Backup & iOS Setup" class="ios-glass p-2.5 rounded-xl text-slate-200 hover:text-white active:scale-95 transition">
-                    <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"></path>
-                    </svg>
-                </button>
-            </div>
-        </header>
+    Object.keys(this.allData).forEach((dateKey) => {
+      const item = this.allData[dateKey].find((a) => a.id === agendaId);
+      if (item) {
+        item.time = newTime;
+      }
+    });
+    this.saveToStorage();
+    this.syncUI();
+  },
 
-        <!-- REAL-TIME CLOCK & BIG RINGING ALARM BELL WIDGET -->
-        <section id="alarmHeaderWidget" class="ios-glass rounded-3xl p-3.5 mb-4 border border-white/10 transition-all duration-300 relative overflow-hidden">
-            <div class="flex items-center justify-between gap-3">
-                <!-- Left: Big Visual Ringing Bell Button -->
-                <div class="flex items-center gap-3 min-w-0">
-                    <button 
-                        type="button"
-                        id="bigBellButton"
-                        onclick="handleBigBellTap()"
-                        title="Tap to Enable Sound or Stop Active Alarm"
-                        class="w-14 h-14 rounded-2xl bg-gradient-to-br from-amber-500/20 via-violet-600/20 to-rose-500/20 border border-amber-400/30 flex items-center justify-center relative flex-shrink-0 active:scale-95 transition"
-                    >
-                        <!-- Glowing ring behind bell when ringing -->
-                        <span id="bigBellGlowRing" class="hidden absolute inset-0 rounded-2xl border-2 border-rose-500 alarm-pulse-glow pointer-events-none"></span>
-                        
-                        <!-- Large Bell SVG -->
-                        <svg id="bigBellSvg" class="w-8 h-8 text-amber-400 transition-colors" fill="currentColor" viewBox="0 0 24 24">
-                            <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/>
-                        </svg>
+  deleteAgenda(agendaId) {
+    const dateKey = this.getSelectedDateKey();
+    if (!this.allData[dateKey]) return;
+    this.allData[dateKey] = this.allData[dateKey].filter((item) => item.id !== agendaId);
+    if (window.AlarmEngine && window.AlarmEngine.activeAgendaId === agendaId) {
+      window.AlarmEngine.stopAlarm();
+    }
+    this.saveToStorage();
+    this.syncUI();
+  },
 
-                        <!-- Active Alarm Count Badge -->
-                        <span id="bigBellBadge" class="hidden absolute -top-1.5 -right-1.5 min-w-[20px] h-[20px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-extrabold flex items-center justify-center shadow-lg">!</span>
-                    </button>
+  renderAgendas() {
+    const dateKey = this.getSelectedDateKey();
+    const rawList = this.getAgendasForDate(dateKey);
 
-                    <div class="min-w-0">
-                        <div class="flex items-center gap-1.5">
-                            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping" id="liveClockDot"></span>
-                            <span id="liveClockTime" class="text-sm sm:text-base font-extrabold text-white tracking-tight tabular-nums">--:--:-- --</span>
-                        </div>
-                        <p id="alarmStatusSubtext" class="text-[11px] text-slate-400 truncate mt-0.5">
-                            Tap "Sound On" para mo-tingog sa iPhone
-                        </p>
-                        <p id="nextAlarmCountdown" class="text-[10px] font-semibold text-amber-300 truncate mt-0.5">
-                            Walay naka-set nga alarm karon
-                        </p>
-                    </div>
-                </div>
+    // Update Progress Badge
+    const doneCount = rawList.filter((a) => a.done).length;
+    this.progressBadge.textContent = `${doneCount} / ${rawList.length} Done`;
 
-                <!-- Right: Sound Enabler & Test Alarm Controls -->
-                <div class="flex flex-col gap-1.5 flex-shrink-0">
-                    <button 
-                        type="button"
-                        id="soundToggleBtn"
-                        onclick="toggleSoundPermission()"
-                        class="px-3 py-1.5 rounded-xl text-[11px] font-extrabold border transition flex items-center justify-center gap-1 bg-amber-500/20 border-amber-400/40 text-amber-300 hover:bg-amber-500/30 active:scale-95"
-                    >
-                        <span id="soundToggleIcon">🔇</span>
-                        <span id="soundToggleText">Enable Sound</span>
-                    </button>
-                    <button 
-                        type="button"
-                        onclick="triggerTestAlarm()"
-                        class="px-3 py-1.5 rounded-xl text-[10px] font-bold bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 active:scale-95 transition flex items-center justify-center gap-1"
-                    >
-                        <span>🔔 Test Alarm</span>
-                    </button>
-                </div>
-            </div>
+    // Apply Filter
+    const filtered = rawList.filter((item) => {
+      if (this.currentFilter === "pending") return !item.done;
+      if (this.currentFilter === "done") return item.done;
+      return true;
+    });
 
-            <!-- ACTIVE RINGING ALARM URGENT BANNER (Hidden until alarm triggers) -->
-            <div id="activeAlarmBanner" class="hidden mt-3 pt-3 border-t border-rose-500/40 bg-gradient-to-r from-rose-950/80 via-red-900/60 to-amber-950/80 -mx-3.5 -mb-3.5 p-3.5 rounded-b-3xl">
-                <div class="flex items-start justify-between gap-2 mb-2.5">
-                    <div class="flex items-center gap-2">
-                        <span class="px-2 py-0.5 rounded-md bg-rose-500 text-white text-[10px] font-extrabold uppercase tracking-wider animate-pulse">
-                            ⏰ ALARM RINGING NOW!
-                        </span>
-                        <span id="ringingAlarmTimeBadge" class="text-xs font-extrabold text-amber-300">08:30 AM</span>
-                    </div>
-                </div>
-                <h4 id="ringingAlarmTitle" class="text-base font-extrabold text-white leading-snug mb-1">
-                    Agenda Title Here
-                </h4>
-                <p id="ringingAlarmNote" class="text-xs text-rose-200/90 mb-3"></p>
+    this.listContainer.innerHTML = "";
 
-                <div class="grid grid-cols-3 gap-2">
-                    <button 
-                        type="button"
-                        onclick="stopActiveAlarm(true)"
-                        class="py-2.5 px-2 rounded-xl bg-white/15 hover:bg-white/25 text-white text-xs font-extrabold active:scale-95 transition border border-white/20"
-                    >
-                        🔕 Stop Bell
-                    </button>
-                    <button 
-                        type="button"
-                        onclick="snoozeActiveAlarm(5)"
-                        class="py-2.5 px-2 rounded-xl bg-amber-500/30 hover:bg-amber-500/40 text-amber-200 text-xs font-extrabold active:scale-95 transition border border-amber-400/40"
-                    >
-                        💤 +5 Mins
-                    </button>
-                    <button 
-                        type="button"
-                        onclick="markRingingAgendaDone()"
-                        class="py-2.5 px-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-[#0f0e1a] text-xs font-extrabold active:scale-95 transition shadow-lg shadow-emerald-500/30"
-                    >
-                        ✓ Done Na
-                    </button>
-                </div>
-            </div>
-        </section>
-
-        <!-- PROMINENT SELECTED DAY & DATE HERO CARD -->
-        <section class="ios-glass rounded-3xl p-4 mb-4 shadow-xl shadow-black/30 relative overflow-hidden">
-            <div class="absolute -right-8 -top-8 w-32 h-32 rounded-full bg-gradient-to-br from-violet-600/25 to-blue-500/10 blur-2xl pointer-events-none"></div>
-
-            <!-- Top Row: Day of Week Badge & "Karon (Today)" Reset -->
-            <div class="flex items-center justify-between gap-2 mb-3">
-                <div class="flex items-center gap-2 flex-wrap">
-                    <span id="heroDayBadge" class="px-3 py-1 rounded-full text-xs font-extrabold uppercase tracking-wider bg-gradient-to-r from-violet-600 to-blue-600 text-white shadow-md shadow-violet-600/30">
-                        MONDAY
-                    </span>
-                    <span id="heroRelativeBadge" class="text-xs font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-0.5 rounded-full">
-                        Karon • Today
-                    </span>
-                </div>
-                <button onclick="goToToday()" class="text-xs font-semibold px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-slate-200 active:scale-95 transition flex items-center gap-1 border border-white/10">
-                    <svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                    </svg>
-                    <span>Karon</span>
-                </button>
-            </div>
-
-            <!-- Main Full Date Heading + Prev/Next Day Arrows -->
-            <div class="flex items-center justify-between mb-4">
-                <div>
-                    <h2 id="heroFullDate" class="text-2xl sm:text-[26px] font-extrabold text-white tracking-tight leading-tight">
-                        October 26, 2026
-                    </h2>
-                    <p id="heroBisayaDay" class="text-xs text-slate-400 mt-0.5">
-                        Lunes • Pili-a ang petsa o adlaw sa ubos
-                    </p>
-                </div>
-                <div class="flex items-center gap-1.5">
-                    <button onclick="shiftDateByDays(-1)" title="Previous Day" class="p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 active:scale-90 transition">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M15 19l-7-7 7-7"></path>
-                        </svg>
-                    </button>
-                    <button onclick="shiftDateByDays(1)" title="Next Day" class="p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 active:scale-90 transition">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M9 5l7 7-7 7"></path>
-                        </svg>
-                    </button>
-                </div>
-            </div>
-
-            <!-- MONTH / DAY / YEAR (2026 - 2040) DROPDOWN SELECTORS -->
-            <div class="grid grid-cols-12 gap-2 mb-3">
-                <!-- Month Selector -->
-                <div class="col-span-5">
-                    <label for="selectMonth" class="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1 pl-1">Month (Bulan)</label>
-                    <select id="selectMonth" onchange="handleDropdownDateChange()" class="w-full bg-[#131221] text-slate-100 text-xs font-semibold rounded-xl px-2.5 py-2.5 border border-white/10 focus:outline-none focus:border-violet-500">
-                    </select>
-                </div>
-                <!-- Day Selector -->
-                <div class="col-span-3">
-                    <label for="selectDay" class="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1 pl-1">Day (Adlaw)</label>
-                    <select id="selectDay" onchange="handleDropdownDateChange()" class="w-full bg-[#131221] text-slate-100 text-xs font-semibold rounded-xl px-2.5 py-2.5 border border-white/10 focus:outline-none focus:border-violet-500">
-                    </select>
-                </div>
-                <!-- Year Selector (2026 - 2040) -->
-                <div class="col-span-4">
-                    <label for="selectYear" class="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1 pl-1">Year (2026-40)</label>
-                    <select id="selectYear" onchange="handleDropdownDateChange()" class="w-full bg-[#131221] text-emerald-300 text-xs font-bold rounded-xl px-2.5 py-2.5 border border-white/10 focus:outline-none focus:border-violet-500">
-                    </select>
-                </div>
-            </div>
-
-            <!-- INTERACTIVE MONDAY - SUNDAY WEEK STRIP SELECTOR -->
-            <div class="pt-2 border-t border-white/10">
-                <div class="flex items-center justify-between mb-2">
-                    <span class="text-[11px] font-semibold text-slate-400 flex items-center gap-1">
-                        <span>Pili og Adlaw (Monday – Sunday)</span>
-                    </span>
-                    <div class="flex items-center gap-2">
-                        <button onclick="shiftDateByDays(-7)" class="text-[11px] font-semibold text-violet-300 hover:text-white px-1.5 py-0.5 rounded bg-white/5">← Prev Wk</button>
-                        <button onclick="shiftDateByDays(7)" class="text-[11px] font-semibold text-violet-300 hover:text-white px-1.5 py-0.5 rounded bg-white/5">Next Wk →</button>
-                    </div>
-                </div>
-                <div id="weekStripContainer" class="grid grid-cols-7 gap-1.5">
-                    <!-- Populated dynamically via JS (Mon - Sun) -->
-                </div>
-            </div>
-        </section>
-
-        <!-- DAILY PROGRESS & FILTER BAR -->
-        <section class="ios-glass rounded-2xl p-3.5 mb-4">
-            <div class="flex items-center justify-between mb-2">
-                <div class="flex items-center gap-2">
-                    <span class="text-xs font-bold text-slate-200">Status sa Adlaw:</span>
-                    <span id="progressSummaryText" class="text-xs font-semibold text-emerald-400">0/0 Done</span>
-                </div>
-                <span id="progressPercentBadge" class="text-xs font-extrabold text-slate-300">0%</span>
-            </div>
-            <!-- Progress Bar Track -->
-            <div class="w-full h-2.5 bg-[#121120] rounded-full overflow-hidden p-0.5 border border-white/5 mb-3">
-                <div id="progressBarFill" class="h-full rounded-full bg-gradient-to-r from-violet-500 via-blue-500 to-emerald-400 transition-all duration-500" style="width: 0%"></div>
-            </div>
-
-            <!-- Filter Pills: All, Pending, Done -->
-            <div class="grid grid-cols-3 gap-1.5 bg-[#121120] p-1 rounded-xl border border-white/5">
-                <button onclick="setAgendaFilter('all')" id="filterBtn-all" class="py-1.5 px-2 rounded-lg text-xs font-bold transition bg-violet-600 text-white shadow">
-                    Tanan (<span id="countAll">0</span>)
-                </button>
-                <button onclick="setAgendaFilter('pending')" id="filterBtn-pending" class="py-1.5 px-2 rounded-lg text-xs font-semibold transition text-slate-400 hover:text-white">
-                    Buhatonon (<span id="countPending">0</span>)
-                </button>
-                <button onclick="setAgendaFilter('done')" id="filterBtn-done" class="py-1.5 px-2 rounded-lg text-xs font-semibold transition text-slate-400 hover:text-white">
-                    Human Na (<span id="countDone">0</span>)
-                </button>
-            </div>
-        </section>
-
-        <!-- QUICK ADD AGENDA FORM CARD -->
-        <section class="ios-glass rounded-2xl p-3.5 mb-4 border border-violet-500/20">
-            <form id="addAgendaForm" onsubmit="handleAddAgenda(event)">
-                <div class="flex items-center justify-between mb-2">
-                    <label for="agendaTitleInput" class="text-xs font-bold text-violet-200 flex items-center gap-1.5">
-                        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                        <span>Add Agenda para sa <span id="formTargetDateLabel" class="underline decoration-violet-400">Oct 26</span></span>
-                    </label>
-                    <button type="button" onclick="toggleAdvancedAdd()" id="toggleDetailsBtn" class="text-[11px] font-semibold text-blue-400 hover:text-blue-300">
-                        + Priority & Note
-                    </button>
-                </div>
-
-                <div class="flex gap-2 mb-2.5">
-                    <input 
-                        type="text" 
-                        id="agendaTitleInput" 
-                        placeholder="Unsay imong buhaton ani nga adlaw?" 
-                        required
-                        maxlength="140"
-                        class="flex-1 bg-[#121120] text-sm text-white placeholder-slate-500 rounded-xl px-3.5 py-3 border border-white/10 focus:outline-none focus:border-violet-500 transition"
-                    >
-                    <button 
-                        type="submit" 
-                        class="px-4 py-3 rounded-xl bg-gradient-to-r from-violet-600 to-blue-600 hover:from-violet-500 hover:to-blue-500 text-white font-bold text-sm shadow-lg shadow-violet-600/30 active:scale-95 transition flex items-center gap-1 flex-shrink-0"
-                    >
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"></path>
-                        </svg>
-                        <span>Add</span>
-                    </button>
-                </div>
-
-                <!-- Always-Visible Alarm Time Picker Row -->
-                <div class="flex items-center justify-between gap-2 bg-[#121120]/90 px-3 py-2 rounded-xl border border-white/10">
-                    <div class="flex items-center gap-2">
-                        <svg class="w-4 h-4 text-amber-400 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
-                            <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/>
-                        </svg>
-                        <label for="agendaTimeInput" class="text-[11px] font-bold text-slate-300">Oras sa Alarm (Optional):</label>
-                    </div>
-                    <input 
-                        type="time" 
-                        id="agendaTimeInput" 
-                        class="bg-[#1c1b2e] text-xs font-bold text-amber-300 rounded-lg px-2.5 py-1.5 border border-amber-500/30 focus:outline-none focus:border-amber-400"
-                    >
-                </div>
-
-                <!-- Collapsible Extra Options: Priority & Note -->
-                <div id="advancedAddOptions" class="hidden mt-3 pt-3 border-t border-white/10 space-y-2.5">
-                    <div>
-                        <label class="block text-[10px] font-semibold uppercase text-slate-400 mb-1">Priority Level</label>
-                        <select id="agendaPriorityInput" class="w-full bg-[#121120] text-xs text-slate-200 font-semibold rounded-xl px-3 py-2 border border-white/10 focus:outline-none focus:border-violet-500">
-                            <option value="normal">Normal • Kasagaran</option>
-                            <option value="important">Important • Importante</option>
-                            <option value="urgent">Urgent • Kinahanglan Dayon</option>
-                        </select>
-                    </div>
-                    <div>
-                        <input 
-                            type="text" 
-                            id="agendaNoteInput" 
-                            placeholder="Dugang detalye o pahinumdom (optional)..." 
-                            maxlength="120"
-                            class="w-full bg-[#121120] text-xs text-slate-200 placeholder-slate-500 rounded-xl px-3 py-2 border border-white/10 focus:outline-none focus:border-violet-500"
-                        >
-                    </div>
-                </div>
-            </form>
-        </section>
-
-        <!-- AGENDA LIST SECTION FOR SELECTED DATE -->
-        <section class="flex-1 flex flex-col">
-            <div class="flex items-center justify-between mb-2 px-1">
-                <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400">
-                    Mga Agenda (<span id="agendaListTitleDate">Oct 26, 2026</span>)
-                </h3>
-                <button id="clearCompletedBtn" onclick="clearCompletedForCurrentDate()" class="hidden text-[11px] font-semibold text-rose-400 hover:text-rose-300 transition">
-                    Clear Done
-                </button>
-            </div>
-
-            <!-- Dynamic Agenda Items Container -->
-            <div id="agendaListContainer" class="space-y-2.5 pb-6">
-                <!-- Populated dynamically via JS -->
-            </div>
-        </section>
-
-    </div>
-
-    <!-- BOTTOM STICKY iOS TAB BAR -->
-    <nav class="fixed bottom-0 inset-x-0 z-30 ios-glass-strong pb-[env(safe-area-inset-bottom,12px)] pt-2 px-4">
-        <div class="max-w-md mx-auto grid grid-cols-3 gap-2">
-            <button onclick="goToToday()" class="flex flex-col items-center justify-center py-1 text-violet-400 active:scale-95 transition">
-                <svg class="w-5 h-5 mb-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path>
-                </svg>
-                <span class="text-[10px] font-bold">Karon (Today)</span>
-            </button>
-            <button onclick="openAllDatesModal()" class="flex flex-col items-center justify-center py-1 text-slate-300 hover:text-white active:scale-95 transition">
-                <svg class="w-5 h-5 mb-0.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
-                </svg>
-                <span class="text-[10px] font-semibold">All Scheduled Dates</span>
-            </button>
-            <button onclick="openSettingsModal()" class="flex flex-col items-center justify-center py-1 text-slate-300 hover:text-white active:scale-95 transition">
-                <svg class="w-5 h-5 mb-0.5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"></path>
-                </svg>
-                <span class="text-[10px] font-semibold">iPhone Setup & Backup</span>
-            </button>
+    if (filtered.length === 0) {
+      this.listContainer.innerHTML = `
+        <div class="text-center py-8 px-4 rounded-2xl bg-slate-900/50 border border-dashed border-slate-800">
+          <p class="text-sm text-slate-400 font-semibold">Walay naka-lista nga agenda.</p>
+          <p class="text-xs text-slate-500 mt-1">Pag-dugang og agenda sa ibabaw para niining adlawa!</p>
         </div>
-    </nav>
+      `;
+      return;
+    }
 
-    <!-- MODAL 1: ALL SCHEDULED DATES OVERVIEW (2026 - 2040) -->
-    <div id="allDatesModal" class="fixed inset-0 z-50 hidden bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
-        <div class="ios-glass-strong w-full max-w-md rounded-t-3xl sm:rounded-3xl max-h-[85vh] flex flex-col modal-slide-up border border-white/10">
-            <!-- Modal Header -->
-            <div class="p-4 border-b border-white/10 flex items-center justify-between">
-                <div>
-                    <h3 class="text-base font-extrabold text-white">Tanan Petsa nga naay Agenda</h3>
-                    <p class="text-xs text-slate-400">I-tap ang petsa aron ma-ablihan dayon (2026–2040)</p>
-                </div>
-                <button onclick="closeAllDatesModal()" class="p-2 rounded-full bg-white/10 text-slate-300 hover:text-white">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
-                    </svg>
-                </button>
-            </div>
+    filtered.forEach((item) => {
+      const isThisItemRinging =
+        window.AlarmEngine &&
+        window.AlarmEngine.isRinging &&
+        window.AlarmEngine.activeAgendaId === item.id;
 
-            <!-- Search Bar inside Modal -->
-            <div class="p-3 border-b border-white/5">
-                <input 
-                    type="text" 
-                    id="searchAgendasInput" 
-                    oninput="renderAllDatesList()" 
-                    placeholder="Pangitaa ang agenda o petsa (e.g. Dentist, 2027)..." 
-                    class="w-full bg-[#121120] text-xs text-white placeholder-slate-500 rounded-xl px-3.5 py-2.5 border border-white/10 focus:outline-none focus:border-violet-500"
-                >
-            </div>
+      const priorityColors = {
+        normal: "bg-slate-800 text-slate-300",
+        important: "bg-amber-500/20 text-amber-300 border border-amber-500/30",
+        urgent: "bg-rose-500/20 text-rose-300 border border-rose-500/30"
+      };
 
-            <!-- Scrollable List of Scheduled Dates -->
-            <div id="allScheduledDatesContainer" class="p-4 overflow-y-auto space-y-2.5 flex-1">
-                <!-- Populated dynamically -->
-            </div>
+      const row = document.createElement("div");
+      row.className = `flex items-center justify-between gap-3 p-3.5 rounded-2xl border transition ${
+        isThisItemRinging
+          ? "alarm-box-active"
+          : item.done
+          ? "bg-slate-900/40 border-slate-800/60 opacity-60"
+          : "bg-slate-900 border-slate-800"
+      }`;
+
+      // Left Checkbox + Details
+      const leftDiv = document.createElement("div");
+      leftDiv.className = "flex items-center gap-3 flex-1 cursor-pointer";
+      leftDiv.addEventListener("click", () => this.toggleDone(item.id));
+
+      const checkCircle = `
+        <div class="w-6 h-6 rounded-lg flex items-center justify-center border-2 transition ${
+          item.done
+            ? "bg-emerald-500 border-emerald-500 text-slate-950 font-black"
+            : "border-slate-600 bg-slate-950"
+        }">
+          ${item.done ? "✓" : ""}
         </div>
-    </div>
+      `;
 
-    <!-- MODAL 2: EDIT AGENDA MODAL -->
-    <div id="editAgendaModal" class="fixed inset-0 z-50 hidden bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
-        <div class="ios-glass-strong w-full max-w-md rounded-t-3xl sm:rounded-3xl p-5 modal-slide-up border border-white/10">
-            <div class="flex items-center justify-between mb-4">
-                <h3 class="text-base font-extrabold text-white">Usba ang Agenda (Edit)</h3>
-                <button onclick="closeEditModal()" class="p-2 rounded-full bg-white/10 text-slate-300">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
-                    </svg>
-                </button>
-            </div>
-            <form onsubmit="saveEditedAgenda(event)" class="space-y-3">
-                <input type="hidden" id="editAgendaId">
-                <div>
-                    <label class="block text-xs font-semibold text-slate-300 mb-1">Unsay buhaton?</label>
-                    <input type="text" id="editAgendaTitle" required maxlength="140" class="w-full bg-[#121120] text-sm text-white rounded-xl px-3.5 py-2.5 border border-white/10 focus:outline-none focus:border-violet-500">
-                </div>
-                <div class="grid grid-cols-2 gap-2">
-                    <div>
-                        <label class="block text-xs font-semibold text-slate-300 mb-1">Oras</label>
-                        <input type="time" id="editAgendaTime" class="w-full bg-[#121120] text-xs text-white rounded-xl px-3 py-2.5 border border-white/10">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-semibold text-slate-300 mb-1">Priority</label>
-                        <select id="editAgendaPriority" class="w-full bg-[#121120] text-xs text-white font-semibold rounded-xl px-3 py-2.5 border border-white/10">
-                            <option value="normal">Normal</option>
-                            <option value="important">Important</option>
-                            <option value="urgent">Urgent</option>
-                        </select>
-                    </div>
-                </div>
-                <div>
-                    <label class="block text-xs font-semibold text-slate-300 mb-1">Note / Pahinumdom</label>
-                    <input type="text" id="editAgendaNote" maxlength="120" class="w-full bg-[#121120] text-xs text-white rounded-xl px-3.5 py-2.5 border border-white/10">
-                </div>
-                <div class="flex gap-2 pt-2">
-                    <button type="button" onclick="closeEditModal()" class="flex-1 py-2.5 rounded-xl bg-white/10 text-slate-200 text-xs font-bold">Cancel</button>
-                    <button type="submit" class="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-violet-600 to-blue-600 text-white text-xs font-bold shadow-lg shadow-violet-600/30">I-save ang Kausaban</button>
-                </div>
-            </form>
+      const timeBadge = item.time
+        ? `<span class="inline-flex items-center gap-1 text-[11px] font-mono font-bold px-2 py-0.5 rounded-md ${
+            isThisItemRinging
+              ? "bg-amber-400 text-slate-950"
+              : "bg-indigo-500/20 text-indigo-300"
+          }">
+            ⏰ ${window.AlarmEngine ? window.AlarmEngine.formatTime12Hour(item.time) : item.time}
+          </span>`
+        : "";
+
+      leftDiv.innerHTML = `
+        ${checkCircle}
+        <div class="flex-1">
+          <p class="text-sm font-bold ${item.done ? "line-through text-slate-500" : "text-white"}">
+            ${this.escapeHTML(item.title)}
+          </p>
+          <div class="flex flex-wrap items-center gap-1.5 mt-1">
+            ${timeBadge}
+            <span class="text-[10px] font-bold uppercase px-2 py-0.5 rounded-md ${
+              priorityColors[item.priority] || priorityColors.normal
+            }">
+              ${item.priority}
+            </span>
+          </div>
         </div>
-    </div>
-
-    <!-- MODAL 3: SETTINGS, BACKUP & iOS INSTALLATION GUIDE -->
-    <div id="settingsModal" class="fixed inset-0 z-50 hidden bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
-        <div class="ios-glass-strong w-full max-w-md rounded-t-3xl sm:rounded-3xl max-h-[88vh] flex flex-col modal-slide-up border border-white/10">
-            <div class="p-4 border-b border-white/10 flex items-center justify-between">
-                <div>
-                    <h3 class="text-base font-extrabold text-white">iPhone App Setup & Data Backup</h3>
-                    <p class="text-xs text-slate-400">Tipigi ang imong LocalStorage data ug gamita isip iOS App</p>
-                </div>
-                <button onclick="closeSettingsModal()" class="p-2 rounded-full bg-white/10 text-slate-300">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
-                    </svg>
-                </button>
-            </div>
-
-            <div class="p-4 overflow-y-auto space-y-4 text-xs">
-                <!-- iPhone Add to Home Screen Guide -->
-                <div class="p-3.5 rounded-2xl bg-gradient-to-br from-violet-900/40 to-blue-900/30 border border-violet-500/30">
-                    <h4 class="font-extrabold text-white text-sm mb-2 flex items-center gap-2">
-                        <span>📱 Unsaon Paghimo nga App sa iPhone (iOS)</span>
-                    </h4>
-                    <ol class="space-y-1.5 text-slate-200 list-decimal list-inside leading-relaxed">
-                        <li>I-host kini nga `index.html` sa libre nga site sama sa <strong>Netlify Drop</strong> (app.netlify.com/drop) o <strong>GitHub Pages</strong>.</li>
-                        <li>Ablihi ang imong link gamit ang <strong>Safari</strong> sa imong iPhone.</li>
-                        <li>I-tap ang <strong>Share button</strong> (kuwadrado nga naay arrow pataas sa ubos sa Safari).</li>
-                        <li>I-scroll paubos ug pilia ang <strong>"Add to Home Screen"</strong>.</li>
-                        <li>Mo-gawas na ang <strong>Agenda Ko</strong> icon sa imong iPhone ug mo-abli kini sa full-screen nga murag native app!</li>
-                    </ol>
-                </div>
-
-                <!-- Data Backup & Restore Section -->
-                <div class="p-3.5 rounded-2xl bg-[#121120] border border-white/10 space-y-3">
-                    <h4 class="font-extrabold text-white text-sm">☁️ Backup & Restore (LocalStorage)</h4>
-                    <p class="text-slate-400 leading-relaxed">
-                        Ang imong mga agenda naka-save sa browser sa imong iPhone (`localStorage`). Aron sigurado nga dili mawala hangtod 2040, pwede ka mag-download og backup file bisan kanus-a:
-                    </p>
-                    <div class="grid grid-cols-2 gap-2">
-                        <button onclick="exportAgendaBackup()" class="py-2.5 px-3 rounded-xl bg-emerald-600/20 border border-emerald-500/40 text-emerald-300 font-bold hover:bg-emerald-600/30 transition flex items-center justify-center gap-1.5">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
-                            </svg>
-                            <span>Download Backup</span>
-                        </button>
-                        <label class="py-2.5 px-3 rounded-xl bg-blue-600/20 border border-blue-500/40 text-blue-300 font-bold hover:bg-blue-600/30 transition flex items-center justify-center gap-1.5 cursor-pointer">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path>
-                            </svg>
-                            <span>Restore JSON</span>
-                            <input type="file" accept=".json" onchange="importAgendaBackup(event)" class="hidden">
-                        </label>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- TOAST NOTIFICATION BANNER (No alert() used!) -->
-    <div id="toastBanner" class="fixed top-4 inset-x-0 z-50 flex justify-center pointer-events-none hidden px-4">
-        <div id="toastContent" class="ios-glass-strong px-4 py-2.5 rounded-2xl shadow-2xl border border-emerald-500/40 text-xs font-bold text-white flex items-center gap-2">
-            <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
-            <span id="toastMessage">Saved!</span>
-        </div>
-    </div>
-
-    <script>
-        /******************************************************************
-         * AGENDA KO (2026 - 2040) - CORE APPLICATION LOGIC & LOCALSTORAGE
-         ******************************************************************/
-        const STORAGE_KEY = 'agenda_ko_data_v1';
-        const MIN_YEAR = 2026;
-        const MAX_YEAR = 2040;
-
-        const MONTHS = [
-            "January", "February", "March", "April", "May", "June",
-            "July", "August", "September", "October", "November", "December"
-        ];
-        const SHORT_MONTHS = [
-            "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
-        ];
-        const DAYS_EN = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-        const DAYS_BISAYA = ["Dominggo", "Lunes", "Martes", "Miyerkules", "Huwebes", "Biyernes", "Sabado"];
-
-        // Application State
-        let selectedDateStr = ''; // Format: YYYY-MM-DD
-        let currentFilter = 'all'; // 'all' | 'pending' | 'done'
-        let agendaData = {}; // Object mapping 'YYYY-MM-DD' -> Array of agenda objects
-
-        // Alarm & Audio System State
-        let audioCtx = null;
-        let soundEnabled = false;
-        let alarmRingInterval = null;
-        let activeRingingItem = null; // { dateKey, agendaId, isTest }
-        let dismissedAlarmKeys = {}; // Maps 'YYYY-MM-DD_agendaId_HH:MM' -> true so dismissed alarms don't re-trigger in the same minute
-
-        /**
-         * Initialize / Unlock Web Audio API on user gesture (Required for iOS Safari)
-         */
-        function initOrUnlockAudio() {
-            try {
-                const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-                if (!AudioContextClass) return false;
-
-                if (!audioCtx) {
-                    audioCtx = new AudioContextClass();
-                }
-                if (audioCtx.state === 'suspended') {
-                    audioCtx.resume();
-                }
-
-                // Play a tiny silent buffer to unlock iOS Safari audio channel
-                const buffer = audioCtx.createBuffer(1, 1, 22050);
-                const source = audioCtx.createBufferSource();
-                source.buffer = buffer;
-                source.connect(audioCtx.destination);
-                source.start(0);
-
-                soundEnabled = true;
-                updateSoundToggleUI();
-                return true;
-            } catch (e) {
-                console.warn('Web Audio unlock error:', e);
-                return false;
-            }
-        }
-
-        /**
-         * Toggle Sound Permission button in the top Alarm Widget
-         */
-        function toggleSoundPermission() {
-            if (!soundEnabled) {
-                const ok = initOrUnlockAudio();
-                if (ok) {
-                    playAlarmChimeBurst();
-                    showToast('🔊 Alarm Sound Enabled na para sa imong iPhone!');
-                } else {
-                    showToast('Visual Bell mode active (Audio dili suportado).');
-                }
-            } else {
-                soundEnabled = false;
-                if (alarmRingInterval) {
-                    // Keep visual bell ringing if active, just mute sound
-                }
-                updateSoundToggleUI();
-                showToast('🔇 Alarm Sound Muted (Visual Bell magpadayon).');
-            }
-        }
-
-        function updateSoundToggleUI() {
-            const btn = document.getElementById('soundToggleBtn');
-            const icon = document.getElementById('soundToggleIcon');
-            const text = document.getElementById('soundToggleText');
-            const subtext = document.getElementById('alarmStatusSubtext');
-
-            if (soundEnabled) {
-                btn.className = 'px-3 py-1.5 rounded-xl text-[11px] font-extrabold border transition flex items-center justify-center gap-1 bg-emerald-500/20 border-emerald-400/40 text-emerald-300 hover:bg-emerald-500/30 active:scale-95';
-                icon.textContent = '🔊';
-                text.textContent = 'Sound ON';
-                subtext.textContent = 'Phone Alarm Sound + Big Bell Active';
-            } else {
-                btn.className = 'px-3 py-1.5 rounded-xl text-[11px] font-extrabold border transition flex items-center justify-center gap-1 bg-amber-500/20 border-amber-400/40 text-amber-300 hover:bg-amber-500/30 active:scale-95';
-                icon.textContent = '🔇';
-                text.textContent = 'Enable Sound';
-                subtext.textContent = 'Visual Bell Active • Tap Enable Sound';
-            }
-        }
-
-        /**
-         * Synthesize an iOS-inspired rhythmic double-chime alarm burst using Web Audio API
-         */
-        function playAlarmChimeBurst() {
-            if (!soundEnabled) return;
-            try {
-                if (!audioCtx) initOrUnlockAudio();
-                if (!audioCtx) return;
-                if (audioCtx.state === 'suspended') audioCtx.resume();
-
-                const now = audioCtx.currentTime;
-                const notes = [880, 1174.66, 1318.51, 1760]; // A5, D6, E6, A6 crystal alarm chime
-
-                notes.forEach((freq, idx) => {
-                    const osc = audioCtx.createOscillator();
-                    const gain = audioCtx.createGain();
-
-                    osc.type = 'triangle';
-                    osc.frequency.setValueAtTime(freq, now + idx * 0.11);
-
-                    gain.gain.setValueAtTime(0.001, now + idx * 0.11);
-                    gain.gain.exponentialRampToValueAtTime(0.32, now + idx * 0.11 + 0.02);
-                    gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.11 + 0.22);
-
-                    osc.connect(gain);
-                    gain.connect(audioCtx.destination);
-
-                    osc.start(now + idx * 0.11);
-                    osc.stop(now + idx * 0.11 + 0.24);
-                });
-
-                // Vibrate on supported mobile devices
-                if (navigator.vibrate) {
-                    navigator.vibrate([250, 120, 250]);
-                }
-            } catch (e) {
-                console.warn('Audio playback skipped:', e);
-            }
-        }
-
-        /**
-         * Start the Big Ringing Bell & Repeating Phone Alarm State
-         */
-        function startAlarmRinging(dateKey, agendaItem, isTest = false) {
-            if (activeRingingItem && activeRingingItem.agendaId === agendaItem.id && !isTest) {
-                return; // Already ringing for this item
-            }
-
-            activeRingingItem = {
-                dateKey,
-                agendaId: agendaItem.id,
-                title: agendaItem.title,
-                time: agendaItem.time || 'Karon',
-                note: agendaItem.note || '',
-                isTest
-            };
-
-            // 1. Activate Big Bell Visual Animation & Urgent Banner
-            const widget = document.getElementById('alarmHeaderWidget');
-            const bigBellBtn = document.getElementById('bigBellButton');
-            const bigBellSvg = document.getElementById('bigBellSvg');
-            const bigBellGlow = document.getElementById('bigBellGlowRing');
-            const bigBellBadge = document.getElementById('bigBellBadge');
-            const banner = document.getElementById('activeAlarmBanner');
-
-            widget.classList.add('border-rose-500', 'shadow-2xl', 'shadow-rose-600/30');
-            bigBellBtn.classList.add('bg-rose-500/30', 'border-rose-400');
-            bigBellSvg.classList.add('animate-bell-ring', 'text-rose-400');
-            bigBellSvg.classList.remove('text-amber-400');
-            bigBellGlow.classList.remove('hidden');
-            bigBellBadge.classList.remove('hidden');
-
-            document.getElementById('ringingAlarmTimeBadge').textContent = agendaItem.time ? formatTime12Hr(agendaItem.time) : 'TEST ALARM';
-            document.getElementById('ringingAlarmTitle').textContent = agendaItem.title;
-            document.getElementById('ringingAlarmNote').textContent = agendaItem.note || 'Natunong na sa oras ang imong agenda!';
-            banner.classList.remove('hidden');
-
-            // Re-render agenda list so the specific card's bell also shakes vigorously
-            renderAgendasForSelectedDate();
-
-            // 2. Start Repeating Chime Loop (every 1.4 seconds)
-            if (alarmRingInterval) clearInterval(alarmRingInterval);
-            playAlarmChimeBurst();
-            alarmRingInterval = setInterval(() => {
-                playAlarmChimeBurst();
-            }, 1400);
-        }
-
-        /**
-         * Stop / Dismiss the currently ringing alarm
-         */
-        function stopActiveAlarm(recordDismissal = true) {
-            if (alarmRingInterval) {
-                clearInterval(alarmRingInterval);
-                alarmRingInterval = null;
-            }
-
-            if (activeRingingItem && recordDismissal && !activeRingingItem.isTest) {
-                const dismissKey = `${activeRingingItem.dateKey}_${activeRingingItem.agendaId}_${activeRingingItem.time}`;
-                dismissedAlarmKeys[dismissKey] = true;
-            }
-
-            activeRingingItem = null;
-
-            // Reset Big Bell Visuals
-            const widget = document.getElementById('alarmHeaderWidget');
-            const bigBellBtn = document.getElementById('bigBellButton');
-            const bigBellSvg = document.getElementById('bigBellSvg');
-            const bigBellGlow = document.getElementById('bigBellGlowRing');
-            const bigBellBadge = document.getElementById('bigBellBadge');
-            const banner = document.getElementById('activeAlarmBanner');
-
-            widget.classList.remove('border-rose-500', 'shadow-2xl', 'shadow-rose-600/30');
-            bigBellBtn.classList.remove('bg-rose-500/30', 'border-rose-400');
-            bigBellSvg.classList.remove('animate-bell-ring', 'text-rose-400');
-            bigBellSvg.classList.add('text-amber-400');
-            bigBellGlow.classList.add('hidden');
-            bigBellBadge.classList.add('hidden');
-            banner.classList.add('hidden');
-
-            renderAgendasForSelectedDate();
-            showToast('🔕 Gi-undang na ang alarm bell.');
-        }
-
-        /**
-         * Snooze the currently ringing alarm by +5 minutes
-         */
-        function snoozeActiveAlarm(minutesToAdd = 5) {
-            if (!activeRingingItem) return;
-            const { dateKey, agendaId, isTest } = activeRingingItem;
-
-            const now = new Date();
-            now.setMinutes(now.getMinutes() + minutesToAdd);
-            const newTimeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-
-            if (!isTest && agendaData[dateKey]) {
-                const item = agendaData[dateKey].find(a => a.id === agendaId);
-                if (item) {
-                    item.time = newTimeStr;
-                    item.alarmEnabled = true;
-                    saveAgendasToStorage();
-                }
-            }
-
-            stopActiveAlarm(false);
-            showToast(`💤 Na-snooze! Mo-ring balik sa ${formatTime12Hr(newTimeStr)}`);
-        }
-
-        /**
-         * Immediately mark the ringing agenda item as Done and stop the alarm
-         */
-        function markRingingAgendaDone() {
-            if (!activeRingingItem) return;
-            const { dateKey, agendaId, isTest } = activeRingingItem;
-
-            if (!isTest && agendaData[dateKey]) {
-                const item = agendaData[dateKey].find(a => a.id === agendaId);
-                if (item) {
-                    item.done = true;
-                    saveAgendasToStorage();
-                }
-            }
-
-            stopActiveAlarm(true);
-            setSelectedDate(selectedDateStr);
-            showToast('✓ Human na ang agenda ug gi-undang na ang alarm!');
-        }
-
-        /**
-         * Trigger a Test Alarm anytime so the user can see the Big Bell shake & hear the sound
-         */
-        function triggerTestAlarm() {
-            initOrUnlockAudio();
-            startAlarmRinging(
-                selectedDateStr,
-                {
-                    id: 'test-alarm',
-                    title: 'Test Alarm • Mao kini ang tingog ug uyog sa Bell!',
-                    time: '',
-                    note: 'I-tap ang "Stop Bell" o "Done Na" aron ma-undang.'
-                },
-                true
-            );
-        }
-
-        /**
-         * Handle tapping the Big Bell Icon in the header
-         */
-        function handleBigBellTap() {
-            if (activeRingingItem) {
-                stopActiveAlarm(true);
-            } else {
-                initOrUnlockAudio();
-                triggerTestAlarm();
-            }
-        }
-
-        /**
-         * Real-time 1-second Clock & Automatic Alarm Checker
-         */
-        function updateLiveClockAndCheckAlarms() {
-            const now = new Date();
-            const hours24 = now.getHours();
-            const mins = now.getMinutes();
-            const secs = now.getSeconds();
-            const ampm = hours24 >= 12 ? 'PM' : 'AM';
-            const hours12 = hours24 % 12 || 12;
-
-            const timeDisplay = `${String(hours12).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')} ${ampm}`;
-            const clockEl = document.getElementById('liveClockTime');
-            if (clockEl) {
-                clockEl.textContent = `${SHORT_MONTHS[now.getMonth()]} ${now.getDate()}, ${now.getFullYear()} • ${timeDisplay}`;
-            }
-
-            // Current DateKey & HH:MM
-            const todayKey = toDateKey(now);
-            const currentHHMM = `${String(hours24).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
-
-            // Also check `selectedDateStr` if the user is testing on the currently selected date, plus `todayKey`
-            const keysToCheck = Array.from(new Set([todayKey, selectedDateStr]));
-            let upcomingAlarms = [];
-
-            keysToCheck.forEach(dKey => {
-                const list = agendaData[dKey] || [];
-                list.forEach(item => {
-                    if (!item.done && item.time && item.alarmEnabled !== false) {
-                        if (dKey === todayKey || dKey === selectedDateStr) {
-                            upcomingAlarms.push({ dKey, item });
-                        }
-                        const dismissKey = `${dKey}_${item.id}_${item.time}`;
-                        if (item.time === currentHHMM && !dismissedAlarmKeys[dismissKey]) {
-                            startAlarmRinging(dKey, item, false);
-                        }
-                    }
-                });
-            });
-
-            // Update Next Alarm Indicator text
-            const nextEl = document.getElementById('nextAlarmCountdown');
-            if (nextEl) {
-                const todayList = (agendaData[selectedDateStr] || []).filter(
-                    a => !a.done && a.time && a.alarmEnabled !== false
-                ).sort((a, b) => a.time.localeCompare(b.time));
-
-                if (todayList.length > 0) {
-                    const nextItem = todayList.find(a => a.time >= currentHHMM) || todayList[0];
-                    nextEl.textContent = `🔔 Sunod Alarm: ${formatTime12Hr(nextItem.time)} — "${nextItem.title.slice(0, 26)}"`;
-                } else {
-                    nextEl.textContent = 'Walay pending nga alarm ani nga petsa';
-                }
-            }
-        }
-
-        /**
-         * Toggle individual agenda item's Alarm Bell ON / OFF
-         */
-        function toggleItemAlarmBell(agendaId, event) {
-            if (event) event.stopPropagation();
-            const list = agendaData[selectedDateStr] || [];
-            const item = list.find(a => a.id === agendaId);
-            if (!item) return;
-
-            item.alarmEnabled = item.alarmEnabled === false ? true : false;
-            saveAgendasToStorage();
-
-            if (activeRingingItem && activeRingingItem.agendaId === agendaId && !item.alarmEnabled) {
-                stopActiveAlarm(true);
-            } else {
-                renderAgendasForSelectedDate();
-                showToast(item.alarmEnabled ? `🔔 Alarm ON para sa ${formatTime12Hr(item.time)}` : '🔕 Alarm OFF para ani nga agenda');
-            }
-        }
-
-        /**
-         * Generate an Apple Touch Icon dynamically via Canvas so iPhone Home Screen gets the icon
-         */
-        function setupDynamicAppleTouchIcon() {
-            try {
-                const canvas = document.createElement('canvas');
-                canvas.width = 180;
-                canvas.height = 180;
-                const ctx = canvas.getContext('2d');
-
-                // Deep Indigo Background
-                const bgGrad = ctx.createLinearGradient(0, 0, 180, 180);
-                bgGrad.addColorStop(0, '#3b82f6');
-                bgGrad.addColorStop(0.5, '#6d28d9');
-                bgGrad.addColorStop(1, '#1e1b4b');
-                ctx.fillStyle = bgGrad;
-                ctx.fillRect(0, 0, 180, 180);
-
-                // Inner Calendar Card
-                ctx.fillStyle = '#ffffff';
-                ctx.beginPath();
-                ctx.roundRect(32, 38, 116, 110, 22);
-                ctx.fill();
-
-                // Mint Checkmark Circle
-                ctx.fillStyle = '#10b981';
-                ctx.beginPath();
-                ctx.arc(118, 115, 34, 0, Math.PI * 2);
-                ctx.fill();
-
-                // White Checkmark
-                ctx.strokeStyle = '#0f0e1a';
-                ctx.lineWidth = 10;
-                ctx.lineCap = 'round';
-                ctx.lineJoin = 'round';
-                ctx.beginPath();
-                ctx.moveTo(102, 115);
-                ctx.lineTo(114, 127);
-                ctx.lineTo(135, 103);
-                ctx.stroke();
-
-                const link = document.createElement('link');
-                link.rel = 'apple-touch-icon';
-                link.href = canvas.toDataURL('image/png');
-                document.head.appendChild(link);
-            } catch (e) {
-                // Fallback silently if roundRect isn't supported
-            }
-        }
-
-        /**
-         * Format a Date object into 'YYYY-MM-DD' local string
-         */
-        function toDateKey(dateObj) {
-            const y = dateObj.getFullYear();
-            const m = String(dateObj.getMonth() + 1).padStart(2, '0');
-            const d = String(dateObj.getDate()).padStart(2, '0');
-            return `${y}-${m}-${d}`;
-        }
-
-        /**
-         * Parse 'YYYY-MM-DD' safely into local Date object
-         */
-        function parseDateKey(dateKey) {
-            const [y, m, d] = dateKey.split('-').map(Number);
-            return new Date(y, m - 1, d);
-        }
-
-        /**
-         * Clamp any Date object to stay within 2026-01-01 and 2040-12-31
-         */
-        function clampDateToRange(dateObj) {
-            const year = dateObj.getFullYear();
-            if (year < MIN_YEAR) return new Date(MIN_YEAR, 0, 1);
-            if (year > MAX_YEAR) return new Date(MAX_YEAR, 11, 31);
-            return dateObj;
-        }
-
-        /**
-         * Load saved agendas from browser LocalStorage
-         */
-        function loadAgendasFromStorage() {
-            try {
-                const raw = localStorage.getItem(STORAGE_KEY);
-                if (raw) {
-                    agendaData = JSON.parse(raw) || {};
-                } else {
-                    // Seed helpful starter agendas on today's date so the user immediately sees how it works
-                    const todayKey = toDateKey(clampDateToRange(new Date()));
-                    agendaData = {
-                        [todayKey]: [
-                            {
-                                id: 'seed-1',
-                                title: 'Susiha ang akong mga buhatonon karon sa Agenda Ko',
-                                time: '08:30',
-                                alarmEnabled: true,
-                                priority: 'important',
-                                note: 'I-tap ang Bell icon o "Test Alarm" sa taas aron suwayan ang alarm!',
-                                done: false,
-                                createdAt: Date.now()
-                            },
-                            {
-                                id: 'seed-2',
-                                title: 'Magplano sa mga future agendas (2026 - 2040)',
-                                time: '14:00',
-                                alarmEnabled: true,
-                                priority: 'normal',
-                                note: 'Pili lang og Month, Day, ug Year sa taas',
-                                done: true,
-                                createdAt: Date.now() - 1000
-                            }
-                        ]
-                    };
-                    saveAgendasToStorage();
-                }
-            } catch (err) {
-                console.error('Error reading LocalStorage:', err);
-                agendaData = {};
-            }
-        }
-
-        /**
-         * Save agendas dictionary to LocalStorage
-         */
-        function saveAgendasToStorage() {
-            try {
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(agendaData));
-                updateTotalScheduledBadge();
-            } catch (err) {
-                showToast('Storage puno na o naka-private mode!', true);
-            }
-        }
-
-        /**
-         * Populate Month, Day, and Year (2026 - 2040) dropdown selectors
-         */
-        function initDateDropdowns() {
-            const monthSelect = document.getElementById('selectMonth');
-            const yearSelect = document.getElementById('selectYear');
-
-            monthSelect.innerHTML = MONTHS.map((m, idx) => `<option value="${idx}">${m}</option>`).join('');
-
-            let yearOptions = '';
-            for (let y = MIN_YEAR; y <= MAX_YEAR; y++) {
-                yearOptions += `<option value="${y}">${y}</option>`;
-            }
-            yearSelect.innerHTML = yearOptions;
-        }
-
-        /**
-         * Dynamically populate Day dropdown (1..28/29/30/31) based on selected Year & Month
-         */
-        function updateDaysInMonthDropdown(year, monthIndex, selectedDay) {
-            const daySelect = document.getElementById('selectDay');
-            const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
-            const safeDay = Math.min(selectedDay, daysInMonth);
-
-            let html = '';
-            for (let d = 1; d <= daysInMonth; d++) {
-                const dateKey = `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-                const hasItems = agendaData[dateKey] && agendaData[dateKey].length > 0;
-                const dotMarker = hasItems ? ' •' : '';
-                html += `<option value="${d}" ${d === safeDay ? 'selected' : ''}>${d}${dotMarker}</option>`;
-            }
-            daySelect.innerHTML = html;
-            daySelect.value = String(safeDay);
-            return safeDay;
-        }
-
-        /**
-         * Triggered when user changes Month, Day, or Year dropdown
-         */
-        function handleDropdownDateChange() {
-            const year = parseInt(document.getElementById('selectYear').value, 10);
-            const month = parseInt(document.getElementById('selectMonth').value, 10);
-            const currentDayVal = parseInt(document.getElementById('selectDay').value, 10) || 1;
-
-            const validDay = updateDaysInMonthDropdown(year, month, currentDayVal);
-            const newDate = new Date(year, month, validDay);
-            setSelectedDate(toDateKey(newDate));
-        }
-
-        /**
-         * Set the active date key and refresh all UI components
-         */
-        function setSelectedDate(dateKey) {
-            const parsed = clampDateToRange(parseDateKey(dateKey));
-            selectedDateStr = toDateKey(parsed);
-
-            const year = parsed.getFullYear();
-            const month = parsed.getMonth();
-            const day = parsed.getDate();
-            const dayOfWeekIdx = parsed.getDay();
-
-            // Sync dropdowns
-            document.getElementById('selectYear').value = String(year);
-            document.getElementById('selectMonth').value = String(month);
-            updateDaysInMonthDropdown(year, month, day);
-
-            // Sync Hero Header
-            document.getElementById('heroDayBadge').textContent = DAYS_EN[dayOfWeekIdx].toUpperCase();
-            document.getElementById('heroFullDate').textContent = `${MONTHS[month]} ${day}, ${year}`;
-            document.getElementById('heroBisayaDay').textContent = `Adlaw nga ${DAYS_BISAYA[dayOfWeekIdx]} • Week View (Mon–Sun)`;
-
-            const shortDateLabel = `${SHORT_MONTHS[month]} ${day}, ${year}`;
-            document.getElementById('formTargetDateLabel').textContent = `${DAYS_EN[dayOfWeekIdx].slice(0, 3)}, ${SHORT_MONTHS[month]} ${day}`;
-            document.getElementById('agendaListTitleDate').textContent = shortDateLabel;
-
-            // Compute relative day badge ("Karon • Today", "Ugma • Tomorrow", etc.)
-            const todayClean = clampDateToRange(new Date());
-            todayClean.setHours(0, 0, 0, 0);
-            const targetClean = new Date(year, month, day);
-            const diffDays = Math.round((targetClean - todayClean) / (1000 * 60 * 60 * 24));
-
-            const relBadge = document.getElementById('heroRelativeBadge');
-            if (diffDays === 0) {
-                relBadge.textContent = 'Karon • Today';
-                relBadge.className = 'text-xs font-semibold text-emerald-400 bg-emerald-500/15 border border-emerald-500/30 px-2.5 py-0.5 rounded-full';
-            } else if (diffDays === 1) {
-                relBadge.textContent = 'Ugma • Tomorrow';
-                relBadge.className = 'text-xs font-semibold text-blue-300 bg-blue-500/15 border border-blue-500/30 px-2.5 py-0.5 rounded-full';
-            } else if (diffDays === -1) {
-                relBadge.textContent = 'Gahapon • Yesterday';
-                relBadge.className = 'text-xs font-semibold text-slate-300 bg-white/10 border border-white/15 px-2.5 py-0.5 rounded-full';
-            } else if (diffDays > 1) {
-                relBadge.textContent = `In ${diffDays} days`;
-                relBadge.className = 'text-xs font-semibold text-violet-300 bg-violet-500/15 border border-violet-500/30 px-2.5 py-0.5 rounded-full';
-            } else {
-                relBadge.textContent = `${Math.abs(diffDays)} days ago`;
-                relBadge.className = 'text-xs font-semibold text-slate-400 bg-white/5 border border-white/10 px-2.5 py-0.5 rounded-full';
-            }
-
-            renderWeekStrip(parsed);
-            renderAgendasForSelectedDate();
-        }
-
-        /**
-         * Render the Monday - Sunday interactive week strip for the currently selected date's week
-         */
-        function renderWeekStrip(selectedDateObj) {
-            const container = document.getElementById('weekStripContainer');
-            // Find Monday of the current week (Monday = 0 ... Sunday = 6)
-            const dayOfWeek = selectedDateObj.getDay(); // 0 is Sun, 1 is Mon
-            const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-
-            const monday = new Date(selectedDateObj);
-            monday.setDate(selectedDateObj.getDate() + diffToMonday);
-
-            const todayKey = toDateKey(clampDateToRange(new Date()));
-            const weekLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-
-            let html = '';
-            for (let i = 0; i < 7; i++) {
-                const d = new Date(monday);
-                d.setDate(monday.getDate() + i);
-                const dKey = toDateKey(d);
-                const isYearValid = d.getFullYear() >= MIN_YEAR && d.getFullYear() <= MAX_YEAR;
-                const isSelected = dKey === selectedDateStr;
-                const isToday = dKey === todayKey;
-
-                const dayAgendas = agendaData[dKey] || [];
-                const hasAgendas = dayAgendas.length > 0;
-                const allDone = hasAgendas && dayAgendas.every(item => item.done);
-
-                let dotHtml = '<span class="w-1.5 h-1.5 rounded-full bg-transparent mt-1"></span>';
-                if (hasAgendas) {
-                    dotHtml = allDone
-                        ? '<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 mt-1 shadow shadow-emerald-400"></span>'
-                        : '<span class="w-1.5 h-1.5 rounded-full bg-amber-400 mt-1 shadow shadow-amber-400"></span>';
-                }
-
-                const btnClasses = isSelected
-                    ? 'bg-gradient-to-b from-violet-600 to-blue-600 text-white border-violet-400 shadow-lg shadow-violet-600/30 scale-[1.03]'
-                    : isToday
-                        ? 'bg-[#1f1d36] text-emerald-300 border-emerald-500/40 hover:bg-white/10'
-                        : 'bg-[#131221] text-slate-300 border-white/5 hover:bg-white/10';
-
-                html += `
-                    <button 
-                        type="button"
-                        ${!isYearValid ? 'disabled' : ''}
-                        onclick="setSelectedDate('${dKey}')"
-                        class="flex flex-col items-center justify-center py-2 px-1 rounded-2xl border transition active:scale-95 ${btnClasses} ${!isYearValid ? 'opacity-30 cursor-not-allowed' : ''}"
-                    >
-                        <span class="text-[10px] font-bold uppercase tracking-tighter ${isSelected ? 'text-violet-100' : 'text-slate-400'}">${weekLabels[i]}</span>
-                        <span class="text-sm font-extrabold mt-0.5">${d.getDate()}</span>
-                        ${dotHtml}
-                    </button>
-                `;
-            }
-
-            container.innerHTML = html;
-        }
-
-        /**
-         * Shift currently selected date by N days (e.g., -1, +1, -7, +7)
-         */
-        function shiftDateByDays(deltaDays) {
-            const current = parseDateKey(selectedDateStr);
-            current.setDate(current.getDate() + deltaDays);
-            const clamped = clampDateToRange(current);
-            setSelectedDate(toDateKey(clamped));
-        }
-
-        /**
-         * Jump immediately to Today's Date (clamped to 2026-2040)
-         */
-        function goToToday() {
-            const now = clampDateToRange(new Date());
-            setSelectedDate(toDateKey(now));
-            showToast('Gi-set na sa petsa karon (Today)');
-        }
-
-        /**
-         * Render agendas for `selectedDateStr` and update progress bar & counts
-         */
-        function renderAgendasForSelectedDate() {
-            const list = agendaData[selectedDateStr] || [];
-            const totalCount = list.length;
-            const doneCount = list.filter(a => a.done).length;
-            const pendingCount = totalCount - doneCount;
-            const percent = totalCount > 0 ? Math.round((doneCount / totalCount) * 100) : 0;
-
-            // Update Progress Bar & Counters
-            document.getElementById('progressSummaryText').textContent = `${doneCount}/${totalCount} Human Na`;
-            document.getElementById('progressPercentBadge').textContent = `${percent}%`;
-            document.getElementById('progressBarFill').style.width = `${percent}%`;
-
-            document.getElementById('countAll').textContent = totalCount;
-            document.getElementById('countPending').textContent = pendingCount;
-            document.getElementById('countDone').textContent = doneCount;
-
-            // Show/hide "Clear Done" button
-            const clearBtn = document.getElementById('clearCompletedBtn');
-            if (doneCount > 0) {
-                clearBtn.classList.remove('hidden');
-            } else {
-                clearBtn.classList.add('hidden');
-            }
-
-            // Filter items
-            const filtered = list.filter(item => {
-                if (currentFilter === 'pending') return !item.done;
-                if (currentFilter === 'done') return item.done;
-                return true;
-            });
-
-            const container = document.getElementById('agendaListContainer');
-
-            if (filtered.length === 0) {
-                const emptyMsg = totalCount === 0
-                    ? 'Walay naka-lista nga agenda ani nga petsa. Pag-type sa taas aron mag-add!'
-                    : currentFilter === 'pending'
-                        ? 'Hurot na og kahuman imong mga agenda ani nga adlaw! Maayong trabaho!'
-                        : 'Wala pay nahuman nga agenda ani nga adlaw.';
-
-                container.innerHTML = `
-                    <div class="ios-glass rounded-3xl p-8 text-center border border-dashed border-white/10">
-                        <div class="w-12 h-12 rounded-2xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center mx-auto mb-3 text-violet-400">
-                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path>
-                            </svg>
-                        </div>
-                        <p class="text-sm font-bold text-slate-200 mb-1">Walay Agenda nga Nakita</p>
-                        <p class="text-xs text-slate-400 max-w-xs mx-auto leading-relaxed">${emptyMsg}</p>
-                    </div>
-                `;
-                return;
-            }
-
-            // Sort: Pending first, then by time if available
-            const sorted = [...filtered].sort((a, b) => {
-                if (a.done !== b.done) return a.done ? 1 : -1;
-                if (a.time && b.time) return a.time.localeCompare(b.time);
-                if (a.time) return -1;
-                if (b.time) return 1;
-                return 0;
-            });
-
-            container.innerHTML = sorted.map(item => {
-                const priorityBadge = getPriorityBadgeHtml(item.priority);
-                const isAlarmOn = item.alarmEnabled !== false;
-                const isThisRinging = activeRingingItem && activeRingingItem.agendaId === item.id;
-
-                const timeBadge = item.time
-                    ? `<button 
-                        type="button"
-                        onclick="toggleItemAlarmBell('${item.id}', event)"
-                        title="${isAlarmOn ? 'Alarm ON (Tap to Mute)' : 'Alarm OFF (Tap to Enable)'}"
-                        class="text-[11px] font-bold px-2.5 py-0.5 rounded-lg flex items-center gap-1.5 transition active:scale-95 ${
-                            isThisRinging
-                                ? 'bg-rose-500 text-white shadow-lg shadow-rose-500/40 animate-pulse'
-                                : isAlarmOn && !item.done
-                                    ? 'text-amber-300 bg-amber-500/15 border border-amber-400/30 hover:bg-amber-500/25'
-                                    : 'text-slate-400 bg-white/5 border border-white/10'
-                        }">
-                        <svg class="w-3.5 h-3.5 ${isThisRinging ? 'animate-bell-ring text-white' : isAlarmOn && !item.done ? 'text-amber-400' : 'text-slate-500'}" fill="currentColor" viewBox="0 0 24 24">
-                            <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/>
-                        </svg>
-                        <span>${formatTime12Hr(item.time)}</span>
-                        <span class="text-[9px] uppercase opacity-80">${isAlarmOn ? 'ON' : 'OFF'}</span>
-                       </button>`
-                    : '';
-
-                return `
-                    <div class="ios-glass rounded-2xl p-3.5 transition all duration-200 border ${
-                        isThisRinging 
-                            ? 'border-rose-500 bg-rose-950/40 shadow-xl shadow-rose-500/20' 
-                            : item.done 
-                                ? 'border-emerald-500/25 bg-[#161527]/70' 
-                                : 'border-white/10'
-                    } flex items-start gap-3">
-                        <!-- Custom One-Tap Done Checkbox -->
-                        <button 
-                            type="button"
-                            onclick="toggleAgendaDone('${item.id}')"
-                            aria-label="Mark Done or Undone"
-                            class="mt-0.5 w-7 h-7 rounded-xl flex items-center justify-center flex-shrink-0 transition active:scale-90 ${
-                                item.done 
-                                    ? 'bg-emerald-500 text-[#0f0e1a] shadow-md shadow-emerald-500/30 animate-check' 
-                                    : 'bg-[#121120] border-2 border-slate-500 hover:border-violet-400'
-                            }"
-                        >
-                            ${item.done ? `
-                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path>
-                                </svg>
-                            ` : ''}
-                        </button>
-
-                        <!-- Agenda Content -->
-                        <div class="flex-1 min-w-0 cursor-pointer" onclick="toggleAgendaDone('${item.id}')">
-                            <p class="text-sm font-semibold leading-snug break-words transition ${item.done ? 'line-through text-slate-400' : 'text-white'}">
-                                ${escapeHtml(item.title)}
-                            </p>
-                            ${item.note ? `<p class="text-xs text-slate-400 mt-1 break-words ${item.done ? 'line-through opacity-60' : ''}">${escapeHtml(item.note)}</p>` : ''}
-                            
-                            <div class="flex items-center flex-wrap gap-1.5 mt-2">
-                                ${timeBadge}
-                                ${priorityBadge}
-                                ${isThisRinging ? '<span class="text-[10px] font-extrabold uppercase text-white bg-rose-500 px-2 py-0.5 rounded-md animate-bounce">🔔 RINGING!</span>' : ''}
-                                ${item.done ? '<span class="text-[10px] font-extrabold uppercase text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md">✓ Human Na</span>' : ''}
-                            </div>
-                        </div>
-
-                        <!-- Prominent Side Bell Indicator (Shakes when ringing or toggles alarm) & Edit/Delete -->
-                        <div class="flex items-center gap-1 flex-shrink-0">
-                            ${item.time && !item.done ? `
-                                <button 
-                                    type="button"
-                                    onclick="toggleItemAlarmBell('${item.id}', event)"
-                                    title="${isAlarmOn ? 'Bell Alarm Active' : 'Bell Alarm Muted'}"
-                                    class="p-2 rounded-xl transition ${
-                                        isThisRinging 
-                                            ? 'bg-rose-500 text-white animate-bell-ring shadow-lg shadow-rose-500/50' 
-                                            : isAlarmOn 
-                                                ? 'bg-amber-500/15 text-amber-400 hover:bg-amber-500/25' 
-                                                : 'bg-white/5 text-slate-500 hover:text-slate-300'
-                                    }"
-                                >
-                                    <svg class="w-5 h-5 ${isThisRinging ? 'animate-bell-ring' : ''}" fill="currentColor" viewBox="0 0 24 24">
-                                        <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/>
-                                    </svg>
-                                </button>
-                            ` : ''}
-                            <button 
-                                type="button" 
-                                onclick="openEditModal('${item.id}')" 
-                                title="Edit Agenda"
-                                class="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition"
-                            >
-                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path>
-                                </svg>
-                            </button>
-                            <button 
-                                type="button" 
-                                onclick="deleteAgendaItem('${item.id}')" 
-                                title="Delete Agenda"
-                                class="p-2 rounded-xl text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition"
-                            >
-                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
-                                </svg>
-                            </button>
-                        </div>
-                    </div>
-                `;
-            }).join('');
-        }
-
-        /**
-         * Add a new agenda item for the currently selected date
-         */
-        function handleAddAgenda(e) {
-            e.preventDefault();
-            const titleInput = document.getElementById('agendaTitleInput');
-            const timeInput = document.getElementById('agendaTimeInput');
-            const priorityInput = document.getElementById('agendaPriorityInput');
-            const noteInput = document.getElementById('agendaNoteInput');
-
-            const title = titleInput.value.trim();
-            if (!title) return;
-
-            // Automatically unlock audio when user adds a timed agenda
-            if (timeInput.value && !soundEnabled) {
-                initOrUnlockAudio();
-            }
-
-            const newAgenda = {
-                id: 'ag-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
-                title,
-                time: timeInput.value || '',
-                alarmEnabled: true,
-                priority: priorityInput.value || 'normal',
-                note: noteInput.value.trim(),
-                done: false,
-                createdAt: Date.now()
-            };
-
-            if (!agendaData[selectedDateStr]) {
-                agendaData[selectedDateStr] = [];
-            }
-            agendaData[selectedDateStr].push(newAgenda);
-            saveAgendasToStorage();
-
-            // Reset form
-            titleInput.value = '';
-            timeInput.value = '';
-            priorityInput.value = 'normal';
-            noteInput.value = '';
-
-            // Refresh UI
-            setSelectedDate(selectedDateStr);
-            showToast(newAgenda.time ? `🔔 Nadugang ang agenda uban sa Alarm (${formatTime12Hr(newAgenda.time)})!` : 'Nadugang na ang imong agenda!');
-        }
-
-        /**
-         * Toggle an agenda item's Done / Undone status
-         */
-        function toggleAgendaDone(agendaId) {
-            const list = agendaData[selectedDateStr] || [];
-            const item = list.find(a => a.id === agendaId);
-            if (!item) return;
-
-            item.done = !item.done;
-            saveAgendasToStorage();
-
-            // If this item is currently ringing and was marked Done, stop the alarm immediately
-            if (item.done && activeRingingItem && activeRingingItem.agendaId === agendaId) {
-                stopActiveAlarm(true);
-            }
-
-            renderWeekStrip(parseDateKey(selectedDateStr));
-            renderAgendasForSelectedDate();
-
-            if (item.done) {
-                showToast('✓ Human na! Maayong trabaho!');
-            }
-        }
-
-        /**
-         * Delete an agenda item from the selected date
-         */
-        function deleteAgendaItem(agendaId) {
-            const list = agendaData[selectedDateStr] || [];
-            agendaData[selectedDateStr] = list.filter(a => a.id !== agendaId);
-            if (agendaData[selectedDateStr].length === 0) {
-                delete agendaData[selectedDateStr];
-            }
-            saveAgendasToStorage();
-            setSelectedDate(selectedDateStr);
-            showToast('Gitangtang na ang agenda.');
-        }
-
-        /**
-         * Clear all completed agendas on the currently selected date
-         */
-        function clearCompletedForCurrentDate() {
-            const list = agendaData[selectedDateStr] || [];
-            agendaData[selectedDateStr] = list.filter(a => !a.done);
-            if (agendaData[selectedDateStr].length === 0) {
-                delete agendaData[selectedDateStr];
-            }
-            saveAgendasToStorage();
-            setSelectedDate(selectedDateStr);
-            showToast('Nalimpyo na ang mga nahuman nga agenda.');
-        }
-
-        /**
-         * Open Edit Modal for an agenda item
-         */
-        function openEditModal(agendaId) {
-            const list = agendaData[selectedDateStr] || [];
-            const item = list.find(a => a.id === agendaId);
-            if (!item) return;
-
-            document.getElementById('editAgendaId').value = item.id;
-            document.getElementById('editAgendaTitle').value = item.title;
-            document.getElementById('editAgendaTime').value = item.time || '';
-            document.getElementById('editAgendaPriority').value = item.priority || 'normal';
-            document.getElementById('editAgendaNote').value = item.note || '';
-
-            document.getElementById('editAgendaModal').classList.remove('hidden');
-        }
-
-        function closeEditModal() {
-            document.getElementById('editAgendaModal').classList.add('hidden');
-        }
-
-        function saveEditedAgenda(e) {
-            e.preventDefault();
-            const id = document.getElementById('editAgendaId').value;
-            const list = agendaData[selectedDateStr] || [];
-            const item = list.find(a => a.id === id);
-            if (!item) return;
-
-            item.title = document.getElementById('editAgendaTitle').value.trim();
-            item.time = document.getElementById('editAgendaTime').value;
-            item.priority = document.getElementById('editAgendaPriority').value;
-            item.note = document.getElementById('editAgendaNote').value.trim();
-
-            saveAgendasToStorage();
-            closeEditModal();
-            renderAgendasForSelectedDate();
-            showToast('Na-update na ang agenda!');
-        }
-
-        /**
-         * Filter Pills Handler ('all' | 'pending' | 'done')
-         */
-        function setAgendaFilter(filterType) {
-            currentFilter = filterType;
-            ['all', 'pending', 'done'].forEach(f => {
-                const btn = document.getElementById(`filterBtn-${f}`);
-                if (f === filterType) {
-                    btn.className = 'py-1.5 px-2 rounded-lg text-xs font-bold transition bg-violet-600 text-white shadow';
-                } else {
-                    btn.className = 'py-1.5 px-2 rounded-lg text-xs font-semibold transition text-slate-400 hover:text-white';
-                }
-            });
-            renderAgendasForSelectedDate();
-        }
-
-        /**
-         * Toggle Optional Time, Priority & Note inputs in the Add Agenda form
-         */
-        function toggleAdvancedAdd() {
-            const box = document.getElementById('advancedAddOptions');
-            const btn = document.getElementById('toggleDetailsBtn');
-            box.classList.toggle('hidden');
-            btn.textContent = box.classList.contains('hidden') ? '+ Priority & Note' : '− Tagoa ang Details';
-        }
-
-        /**
-         * Update badge showing total number of dates that have agendas
-         */
-        function updateTotalScheduledBadge() {
-            const badge = document.getElementById('totalScheduledBadge');
-            const activeDatesCount = Object.keys(agendaData).filter(k => agendaData[k] && agendaData[k].length > 0).length;
-            if (activeDatesCount > 0) {
-                badge.textContent = activeDatesCount;
-                badge.classList.remove('hidden');
-            } else {
-                badge.classList.add('hidden');
-            }
-        }
-
-        /**
-         * Open Modal showing ALL scheduled dates (2026 - 2040)
-         */
-        function openAllDatesModal() {
-            document.getElementById('searchAgendasInput').value = '';
-            renderAllDatesList();
-            document.getElementById('allDatesModal').classList.remove('hidden');
-        }
-
-        function closeAllDatesModal() {
-            document.getElementById('allDatesModal').classList.add('hidden');
-        }
-
-        function renderAllDatesList() {
-            const query = document.getElementById('searchAgendasInput').value.trim().toLowerCase();
-            const container = document.getElementById('allScheduledDatesContainer');
-
-            const validDateKeys = Object.keys(agendaData)
-                .filter(k => agendaData[k] && agendaData[k].length > 0)
-                .sort();
-
-            const filteredKeys = validDateKeys.filter(dateKey => {
-                if (!query) return true;
-                const dObj = parseDateKey(dateKey);
-                const formattedDate = `${MONTHS[dObj.getMonth()]} ${dObj.getDate()}, ${dObj.getFullYear()} ${DAYS_EN[dObj.getDay()]}`.toLowerCase();
-                if (formattedDate.includes(query) || dateKey.includes(query)) return true;
-                return agendaData[dateKey].some(item => 
-                    item.title.toLowerCase().includes(query) || 
-                    (item.note && item.note.toLowerCase().includes(query))
-                );
-            });
-
-            if (filteredKeys.length === 0) {
-                container.innerHTML = `
-                    <div class="text-center py-8 text-slate-400 text-xs">
-                        Walay nakita nga petsa nga adunay agenda.
-                    </div>
-                `;
-                return;
-            }
-
-            container.innerHTML = filteredKeys.map(dateKey => {
-                const items = agendaData[dateKey];
-                const doneCount = items.filter(i => i.done).length;
-                const dObj = parseDateKey(dateKey);
-                const dayName = DAYS_EN[dObj.getDay()];
-                const fullLabel = `${MONTHS[dObj.getMonth()]} ${dObj.getDate()}, ${dObj.getFullYear()}`;
-
-                return `
-                    <div 
-                        onclick="jumpToDateFromModal('${dateKey}')"
-                        class="p-3.5 rounded-2xl bg-[#131221] hover:bg-white/10 border border-white/10 cursor-pointer transition flex items-center justify-between gap-3"
-                    >
-                        <div class="min-w-0">
-                            <div class="flex items-center gap-2">
-                                <span class="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-md bg-violet-500/20 text-violet-300">${dayName}</span>
-                                <span class="text-sm font-bold text-white">${fullLabel}</span>
-                            </div>
-                            <p class="text-xs text-slate-400 truncate mt-1">
-                                ${items.map(i => (i.done ? '✓ ' : '• ') + escapeHtml(i.title)).join('  ')}
-                            </p>
-                        </div>
-                        <div class="flex-shrink-0 text-right">
-                            <span class="text-xs font-extrabold px-2.5 py-1 rounded-xl ${doneCount === items.length ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-300'}">
-                                ${doneCount}/${items.length} Done
-                            </span>
-                        </div>
-                    </div>
-                `;
-            }).join('');
-        }
-
-        function jumpToDateFromModal(dateKey) {
-            closeAllDatesModal();
-            setSelectedDate(dateKey);
-            showToast(`Gi-ablihan ang ${dateKey}`);
-        }
-
-        /**
-         * Settings & Backup Modal Handlers
-         */
-        function openSettingsModal() {
-            document.getElementById('settingsModal').classList.remove('hidden');
-        }
-
-        function closeSettingsModal() {
-            document.getElementById('settingsModal').classList.add('hidden');
-        }
-
-        function exportAgendaBackup() {
-            const dataStr = JSON.stringify(agendaData, null, 2);
-            const blob = new Blob([dataStr], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `agenda-ko-backup-${selectedDateStr}.json`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-            showToast('Na-download na ang imong Backup JSON!');
-        }
-
-        function importAgendaBackup(event) {
-            const file = event.target.files[0];
-            if (!file) return;
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                try {
-                    const imported = JSON.parse(e.target.result);
-                    if (typeof imported === 'object' && imported !== null) {
-                        agendaData = { ...agendaData, ...imported };
-                        saveAgendasToStorage();
-                        setSelectedDate(selectedDateStr);
-                        closeSettingsModal();
-                        showToast('Malampuson nga na-restore ang imong mga Agenda!');
-                    }
-                } catch (err) {
-                    showToast('Invalid nga JSON backup file!', true);
-                }
-            };
-            reader.readAsText(file);
-        }
-
-        /**
-         * Helper Formatting Functions
-         */
-        function getPriorityBadgeHtml(priority) {
-            if (priority === 'urgent') {
-                return '<span class="text-[10px] font-bold uppercase px-2 py-0.5 rounded-md bg-rose-500/20 text-rose-300 border border-rose-500/30">🔥 Urgent</span>';
-            }
-            if (priority === 'important') {
-                return '<span class="text-[10px] font-bold uppercase px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30">⭐ Important</span>';
-            }
-            return '';
-        }
-
-        function formatTime12Hr(time24) {
-            if (!time24) return '';
-            const [hStr, mStr] = time24.split(':');
-            let h = parseInt(hStr, 10);
-            const ampm = h >= 12 ? 'PM' : 'AM';
-            h = h % 12 || 12;
-            return `${h}:${mStr} ${ampm}`;
-        }
-
-        function escapeHtml(str) {
-            return String(str)
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;')
-                .replace(/'/g, '&#039;');
-        }
-
-        let toastTimeout = null;
-        function showToast(message, isError = false) {
-            const banner = document.getElementById('toastBanner');
-            const content = document.getElementById('toastContent');
-            const msgEl = document.getElementById('toastMessage');
-
-            msgEl.textContent = message;
-            content.className = `ios-glass-strong px-4 py-2.5 rounded-2xl shadow-2xl border text-xs font-bold text-white flex items-center gap-2 ${
-                isError ? 'border-rose-500/50' : 'border-emerald-500/40'
-            }`;
-
-            banner.classList.remove('hidden');
-            if (toastTimeout) clearTimeout(toastTimeout);
-            toastTimeout = setTimeout(() => {
-                banner.classList.add('hidden');
-            }, 2400);
-        }
-
-        /**
-         * Initialize Application on Window Load
-         */
-        window.onload = function() {
-            setupDynamicAppleTouchIcon();
-            loadAgendasFromStorage();
-            initDateDropdowns();
-            updateTotalScheduledBadge();
-
-            // Start on Today's date (clamped to 2026 - 2040)
-            const initialDate = clampDateToRange(new Date());
-            setSelectedDate(toDateKey(initialDate));
-
-            // Start Live Clock & Real-Time Alarm Checker (runs every second)
-            updateLiveClockAndCheckAlarms();
-            setInterval(updateLiveClockAndCheckAlarms, 1000);
-        };
-    </script>
-</body>
-</html>
+      `;
+
+      // Right Side: Per-Item Bell Icon + Delete Button
+      const rightDiv = document.createElement("div");
+      rightDiv.className = "flex items-center gap-2";
+
+      if (item.time) {
+        const bellIndicator = document.createElement("div");
+        bellIndicator.className = `w-9 h-9 rounded-xl flex items-center justify-center border ${
+          isThisItemRinging
+            ? "bg-rose-600/30 border-amber-400"
+            : "bg-slate-950 border-slate-800"
+        }`;
+        bellIndicator.innerHTML = `
+          <span class="text-lg ${isThisItemRinging ? "bell-ringing" : "opacity-75"}">
+            🔔
+          </span>
+        `;
+        rightDiv.appendChild(bellIndicator);
+      }
+
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className =
+        "w-8 h-8 rounded-xl bg-slate-950 hover:bg-rose-500/20 text-slate-500 hover:text-rose-400 border border-slate-800 flex items-center justify-center text-xs font-bold";
+      delBtn.textContent = "✕";
+      delBtn.addEventListener("click", () => this.deleteAgenda(item.id));
+      rightDiv.appendChild(delBtn);
+
+      row.appendChild(leftDiv);
+      row.appendChild(rightDiv);
+      this.listContainer.appendChild(row);
+    });
+  },
+
+  loadFromStorage() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      this.allData = raw ? JSON.parse(raw) : {};
+    } catch (e) {
+      console.error("Failed to read localStorage:", e);
+      this.allData = {};
+    }
+  },
+
+  saveToStorage() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.allData));
+    } catch (e) {
+      console.error("Failed to save localStorage:", e);
+    }
+  },
+
+  escapeHTML(str) {
+    return str.replace(/[&<>"']/g, (m) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;"
+    }[m]));
+  }
+};
+
+window.AgendaApp = AgendaApp;
+document.addEventListener("DOMContentLoaded", () => AgendaApp.init());
