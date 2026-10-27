@@ -1,475 +1,238 @@
-/**
- * app.js
- * Main Application Logic: Date Selector (2026-2040), Monday-Sunday Strip, & LocalStorage CRUD
- */
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>Agenda Ko (2026 - 2040)</title>
 
-const STORAGE_KEY = "agenda_ko_data_v2";
-const MIN_YEAR = 2026;
-const MAX_YEAR = 2040;
+  <!-- iOS Home Screen App (PWA) Meta Tags -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Agenda Ko" />
+  <link rel="apple-touch-icon" href="image_0.png" />
 
-const MONTHS = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December"
-];
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
 
-const WEEKDAYS_MON_FIRST = [
-  { short: "Mon", full: "Monday", jsDay: 1 },
-  { short: "Tue", full: "Tuesday", jsDay: 2 },
-  { short: "Wed", full: "Wednesday", jsDay: 3 },
-  { short: "Thu", full: "Thursday", jsDay: 4 },
-  { short: "Fri", full: "Friday", jsDay: 5 },
-  { short: "Sat", full: "Saturday", jsDay: 6 },
-  { short: "Sun", full: "Sunday", jsDay: 0 }
-];
+  <!-- Custom Separated CSS -->
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen pb-16 select-none">
 
-const AgendaApp = {
-  selectedYear: 2026,
-  selectedMonth: 0, // 0 = Jan
-  selectedDay: 1,
-  currentFilter: "all", // 'all' | 'pending' | 'done'
-  allData: {}, // { "YYYY-MM-DD": [ { id, title, time, priority, done } ] }
+  <!-- MAIN MOBILE CONTAINER -->
+  <div class="max-w-md mx-auto px-4 pt-6 space-y-4">
 
-  init() {
-    this.loadFromStorage();
-
-    // Set initial date to Today (clamped between 2026 and 2040)
-    const now = new Date();
-    const yr = Math.min(Math.max(now.getFullYear(), MIN_YEAR), MAX_YEAR);
-    this.selectedYear = yr;
-    this.selectedMonth = now.getMonth();
-    this.selectedDay = now.getDate();
-
-    this.cacheDOM();
-    this.populateYearAndMonthDropdowns();
-    this.bindEvents();
-    this.syncUI();
-
-    // Initialize Alarm Engine
-    if (window.AlarmEngine) {
-      window.AlarmEngine.init();
-    }
-  },
-
-  cacheDOM() {
-    this.selectMonth = document.getElementById("select-month");
-    this.selectDay = document.getElementById("select-day");
-    this.selectYear = document.getElementById("select-year");
-    this.weekStrip = document.getElementById("week-strip");
-    this.selectedDayName = document.getElementById("selected-day-name");
-    this.selectedFullDate = document.getElementById("selected-full-date");
-    this.progressBadge = document.getElementById("agenda-progress-badge");
-    this.formAdd = document.getElementById("form-add-agenda");
-    this.inputTitle = document.getElementById("input-agenda-title");
-    this.inputTime = document.getElementById("input-agenda-time");
-    this.inputPriority = document.getElementById("input-agenda-priority");
-    this.listContainer = document.getElementById("agenda-list-container");
-  },
-
-  populateYearAndMonthDropdowns() {
-    // Months
-    this.selectMonth.innerHTML = MONTHS.map(
-      (m, idx) => `<option value="${idx}">${m}</option>`
-    ).join("");
-
-    // Years (2026 to 2040)
-    let yearOptions = "";
-    for (let y = MIN_YEAR; y <= MAX_YEAR; y++) {
-      yearOptions += `<option value="${y}">${y}</option>`;
-    }
-    this.selectYear.innerHTML = yearOptions;
-  },
-
-  populateDayDropdown() {
-    const daysInMonth = new Date(this.selectedYear, this.selectedMonth + 1, 0).getDate();
-    if (this.selectedDay > daysInMonth) {
-      this.selectedDay = daysInMonth;
-    }
-
-    let dayOptions = "";
-    for (let d = 1; d <= daysInMonth; d++) {
-      dayOptions += `<option value="${d}">${d}</option>`;
-    }
-    this.selectDay.innerHTML = dayOptions;
-    this.selectDay.value = this.selectedDay;
-  },
-
-  bindEvents() {
-    this.selectMonth.addEventListener("change", (e) => {
-      this.selectedMonth = parseInt(e.target.value, 10);
-      this.syncUI();
-    });
-
-    this.selectDay.addEventListener("change", (e) => {
-      this.selectedDay = parseInt(e.target.value, 10);
-      this.syncUI();
-    });
-
-    this.selectYear.addEventListener("change", (e) => {
-      this.selectedYear = parseInt(e.target.value, 10);
-      this.syncUI();
-    });
-
-    document.getElementById("btn-jump-today").addEventListener("click", () => {
-      const now = new Date();
-      this.selectedYear = Math.min(Math.max(now.getFullYear(), MIN_YEAR), MAX_YEAR);
-      this.selectedMonth = now.getMonth();
-      this.selectedDay = now.getDate();
-      this.syncUI();
-    });
-
-    // Add New Agenda Form Submit
-    this.formAdd.addEventListener("submit", (e) => {
-      e.preventDefault();
-      // Unlock audio automatically when user interacts with form
-      if (window.AlarmEngine && !window.AlarmEngine.soundEnabled) {
-        window.AlarmEngine.unlockiOSAudio(false);
-      }
-      this.addAgenda();
-    });
-
-    // Filter Buttons
-    document.getElementById("filter-all").addEventListener("click", () => this.setFilter("all"));
-    document.getElementById("filter-pending").addEventListener("click", () => this.setFilter("pending"));
-    document.getElementById("filter-done").addEventListener("click", () => this.setFilter("done"));
-  },
-
-  setFilter(filterType) {
-    this.currentFilter = filterType;
-    ["all", "pending", "done"].forEach((f) => {
-      const btn = document.getElementById(`filter-${f}`);
-      if (f === filterType) {
-        btn.className = "text-[11px] px-2.5 py-1 rounded-lg font-bold bg-indigo-600 text-white";
-      } else {
-        btn.className = "text-[11px] px-2.5 py-1 rounded-lg font-bold bg-slate-800 text-slate-400";
-      }
-    });
-    this.renderAgendas();
-  },
-
-  syncUI() {
-    this.selectMonth.value = this.selectedMonth;
-    this.selectYear.value = this.selectedYear;
-    this.populateDayDropdown();
-
-    const currentObj = new Date(this.selectedYear, this.selectedMonth, this.selectedDay);
-    const dayName = currentObj.toLocaleDateString("en-US", { weekday: "long" });
-
-    this.selectedDayName.textContent = dayName.toUpperCase();
-    this.selectedFullDate.textContent = `${MONTHS[this.selectedMonth]} ${this.selectedDay}, ${this.selectedYear}`;
-
-    this.renderWeekStrip(currentObj);
-    this.renderAgendas();
-  },
-
-  /**
-   * Renders the Monday - Sunday Selector Strip for the currently selected week
-   */
-  renderWeekStrip(selectedDateObj) {
-    const jsDay = selectedDateObj.getDay(); // 0 (Sun) to 6 (Sat)
-    const diffToMonday = jsDay === 0 ? -6 : 1 - jsDay;
-    const mondayDate = new Date(selectedDateObj);
-    mondayDate.setDate(selectedDateObj.getDate() + diffToMonday);
-
-    this.weekStrip.innerHTML = "";
-
-    for (let i = 0; i < 7; i++) {
-      const cellDate = new Date(mondayDate);
-      cellDate.setDate(mondayDate.getDate() + i);
-
-      const cYear = cellDate.getFullYear();
-      const cMonth = cellDate.getMonth();
-      const cDay = cellDate.getDate();
-      const dateKey = this.formatDateKey(cYear, cMonth, cDay);
-      const dayAgendas = this.getAgendasForDate(dateKey);
-
-      const isSelected =
-        cYear === this.selectedYear &&
-        cMonth === this.selectedMonth &&
-        cDay === this.selectedDay;
-
-      // Dot color indicator if date has agendas
-      let dotHTML = "";
-      if (dayAgendas.length > 0) {
-        const allDone = dayAgendas.every((a) => a.done);
-        const dotColor = allDone ? "bg-emerald-400" : "bg-amber-400";
-        dotHTML = `<span class="w-1.5 h-1.5 rounded-full ${dotColor} mt-1"></span>`;
-      } else {
-        dotHTML = `<span class="w-1.5 h-1.5 mt-1"></span>`;
-      }
-
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = isSelected
-        ? "flex flex-col items-center py-2 rounded-2xl bg-indigo-600 text-white font-bold shadow-lg border border-indigo-400 transition"
-        : "flex flex-col items-center py-2 rounded-2xl bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 transition";
-
-      btn.innerHTML = `
-        <span class="text-[10px] uppercase opacity-80">${WEEKDAYS_MON_FIRST[i].short}</span>
-        <span class="text-sm font-extrabold mt-0.5">${cDay}</span>
-        ${dotHTML}
-      `;
-
-      btn.addEventListener("click", () => {
-        if (cYear >= MIN_YEAR && cYear <= MAX_YEAR) {
-          this.selectedYear = cYear;
-          this.selectedMonth = cMonth;
-          this.selectedDay = cDay;
-          this.syncUI();
-        }
-      });
-
-      this.weekStrip.appendChild(btn);
-    }
-  },
-
-  formatDateKey(year, monthIndex, day) {
-    const m = String(monthIndex + 1).padStart(2, "0");
-    const d = String(day).padStart(2, "0");
-    return `${year}-${m}-${d}`;
-  },
-
-  getSelectedDateKey() {
-    return this.formatDateKey(this.selectedYear, this.selectedMonth, this.selectedDay);
-  },
-
-  getAgendasForDate(dateKey) {
-    return this.allData[dateKey] || [];
-  },
-
-  addAgenda() {
-    const title = this.inputTitle.value.trim();
-    const time = this.inputTime.value;
-    const priority = this.inputPriority.value;
-
-    if (!title) return;
-
-    const dateKey = this.getSelectedDateKey();
-    if (!this.allData[dateKey]) {
-      this.allData[dateKey] = [];
-    }
-
-    this.allData[dateKey].push({
-      id: "ag_" + Date.now(),
-      title,
-      time: time || "",
-      priority,
-      done: false
-    });
-
-    // Sort by time if time is set
-    this.allData[dateKey].sort((a, b) => (a.time || "99:99").localeCompare(b.time || "99:99"));
-
-    this.saveToStorage();
-    this.inputTitle.value = "";
-    this.inputTime.value = "";
-    this.inputPriority.value = "normal";
-    this.syncUI();
-  },
-
-  toggleDone(agendaId) {
-    const dateKey = this.getSelectedDateKey();
-    const list = this.allData[dateKey] || [];
-    const target = list.find((item) => item.id === agendaId);
-    if (target) {
-      target.done = !target.done;
-      if (target.done && window.AlarmEngine && window.AlarmEngine.activeAgendaId === agendaId) {
-        window.AlarmEngine.stopAlarm();
-      }
-      this.saveToStorage();
-      this.syncUI();
-    }
-  },
-
-  markAgendaDoneFromAlarm(agendaId) {
-    Object.keys(this.allData).forEach((dateKey) => {
-      const item = this.allData[dateKey].find((a) => a.id === agendaId);
-      if (item) {
-        item.done = true;
-      }
-    });
-    this.saveToStorage();
-    this.syncUI();
-  },
-
-  snoozeAgendaItem(agendaId, minutesToAdd = 5) {
-    const now = new Date();
-    now.setMinutes(now.getMinutes() + minutesToAdd);
-    const newHH = String(now.getHours()).padStart(2, "0");
-    const newMM = String(now.getMinutes()).padStart(2, "0");
-    const newTime = `${newHH}:${newMM}`;
-
-    Object.keys(this.allData).forEach((dateKey) => {
-      const item = this.allData[dateKey].find((a) => a.id === agendaId);
-      if (item) {
-        item.time = newTime;
-      }
-    });
-    this.saveToStorage();
-    this.syncUI();
-  },
-
-  deleteAgenda(agendaId) {
-    const dateKey = this.getSelectedDateKey();
-    if (!this.allData[dateKey]) return;
-    this.allData[dateKey] = this.allData[dateKey].filter((item) => item.id !== agendaId);
-    if (window.AlarmEngine && window.AlarmEngine.activeAgendaId === agendaId) {
-      window.AlarmEngine.stopAlarm();
-    }
-    this.saveToStorage();
-    this.syncUI();
-  },
-
-  renderAgendas() {
-    const dateKey = this.getSelectedDateKey();
-    const rawList = this.getAgendasForDate(dateKey);
-
-    // Update Progress Badge
-    const doneCount = rawList.filter((a) => a.done).length;
-    this.progressBadge.textContent = `${doneCount} / ${rawList.length} Done`;
-
-    // Apply Filter
-    const filtered = rawList.filter((item) => {
-      if (this.currentFilter === "pending") return !item.done;
-      if (this.currentFilter === "done") return item.done;
-      return true;
-    });
-
-    this.listContainer.innerHTML = "";
-
-    if (filtered.length === 0) {
-      this.listContainer.innerHTML = `
-        <div class="text-center py-8 px-4 rounded-2xl bg-slate-900/50 border border-dashed border-slate-800">
-          <p class="text-sm text-slate-400 font-semibold">Walay naka-lista nga agenda.</p>
-          <p class="text-xs text-slate-500 mt-1">Pag-dugang og agenda sa ibabaw para niining adlawa!</p>
-        </div>
-      `;
-      return;
-    }
-
-    filtered.forEach((item) => {
-      const isThisItemRinging =
-        window.AlarmEngine &&
-        window.AlarmEngine.isRinging &&
-        window.AlarmEngine.activeAgendaId === item.id;
-
-      const priorityColors = {
-        normal: "bg-slate-800 text-slate-300",
-        important: "bg-amber-500/20 text-amber-300 border border-amber-500/30",
-        urgent: "bg-rose-500/20 text-rose-300 border border-rose-500/30"
-      };
-
-      const row = document.createElement("div");
-      row.className = `flex items-center justify-between gap-3 p-3.5 rounded-2xl border transition ${
-        isThisItemRinging
-          ? "alarm-box-active"
-          : item.done
-          ? "bg-slate-900/40 border-slate-800/60 opacity-60"
-          : "bg-slate-900 border-slate-800"
-      }`;
-
-      // Left Checkbox + Details
-      const leftDiv = document.createElement("div");
-      leftDiv.className = "flex items-center gap-3 flex-1 cursor-pointer";
-      leftDiv.addEventListener("click", () => this.toggleDone(item.id));
-
-      const checkCircle = `
-        <div class="w-6 h-6 rounded-lg flex items-center justify-center border-2 transition ${
-          item.done
-            ? "bg-emerald-500 border-emerald-500 text-slate-950 font-black"
-            : "border-slate-600 bg-slate-950"
-        }">
-          ${item.done ? "✓" : ""}
-        </div>
-      `;
-
-      const timeBadge = item.time
-        ? `<span class="inline-flex items-center gap-1 text-[11px] font-mono font-bold px-2 py-0.5 rounded-md ${
-            isThisItemRinging
-              ? "bg-amber-400 text-slate-950"
-              : "bg-indigo-500/20 text-indigo-300"
-          }">
-            ⏰ ${window.AlarmEngine ? window.AlarmEngine.formatTime12Hour(item.time) : item.time}
-          </span>`
-        : "";
-
-      leftDiv.innerHTML = `
-        ${checkCircle}
-        <div class="flex-1">
-          <p class="text-sm font-bold ${item.done ? "line-through text-slate-500" : "text-white"}">
-            ${this.escapeHTML(item.title)}
-          </p>
-          <div class="flex flex-wrap items-center gap-1.5 mt-1">
-            ${timeBadge}
-            <span class="text-[10px] font-bold uppercase px-2 py-0.5 rounded-md ${
-              priorityColors[item.priority] || priorityColors.normal
-            }">
-              ${item.priority}
+    <!-- 1. TOP HEADER & GIANT BELL WIDGET -->
+    <header class="glass-card rounded-3xl p-4 border border-slate-800 shadow-xl">
+      <div class="flex items-center justify-between gap-3">
+        <!-- App Title & Live Clock -->
+        <div>
+          <div class="flex items-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            <h1 class="text-xl font-extrabold tracking-tight bg-gradient-to-r from-indigo-400 via-cyan-300 to-emerald-300 bg-clip-text text-transparent">
+              Agenda Ko
+            </h1>
+            <span class="text-[11px] bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded-full font-semibold">
+              2026–2040
             </span>
           </div>
+          <p id="live-clock" class="text-2xl font-mono font-bold text-white mt-1">
+            00:00:00 AM
+          </p>
+          <p id="live-today-label" class="text-xs text-slate-400">
+            Loading current date...
+          </p>
         </div>
-      `;
 
-      // Right Side: Per-Item Bell Icon + Delete Button
-      const rightDiv = document.createElement("div");
-      rightDiv.className = "flex items-center gap-2";
-
-      if (item.time) {
-        const bellIndicator = document.createElement("div");
-        bellIndicator.className = `w-9 h-9 rounded-xl flex items-center justify-center border ${
-          isThisItemRinging
-            ? "bg-rose-600/30 border-amber-400"
-            : "bg-slate-950 border-slate-800"
-        }`;
-        bellIndicator.innerHTML = `
-          <span class="text-lg ${isThisItemRinging ? "bell-ringing" : "opacity-75"}">
-            🔔
+        <!-- DAKO NGA BELL ICON SA KILID -->
+        <div id="giant-bell-box" class="relative flex flex-col items-center justify-center w-20 h-20 rounded-2xl bg-slate-900/90 border border-slate-700/80 transition-all duration-300">
+          <!-- Pulsing ring indicator when alarm is active -->
+          <div id="giant-bell-pulse" class="hidden absolute inset-0 rounded-2xl border-2 border-rose-500 animate-ping"></div>
+          
+          <svg id="giant-bell-svg" xmlns="http://www.w3.org/2000/svg" class="w-11 h-11 text-slate-400 transition-colors" viewBox="0 0 24 24" fill="currentColor">
+            <path fill-rule="evenodd" d="M5.25 9a6.75 6.75 0 0113.5 0v.75c0 2.123.8 4.057 2.118 5.52a.75.75 0 01-.297 1.206c-1.544.57-3.16.99-4.831 1.243a3.75 3.75 0 11-7.48 0 24.585 24.585 0 01-4.831-1.244.75.75 0 01-.298-1.205A8.217 8.217 0 005.25 9.75V9zm4.502 8.9a2.25 2.25 0 104.496 0 25.057 25.057 0 01-4.496 0z" clip-rule="evenodd" />
+          </svg>
+          <span id="bell-state-text" class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mt-1">
+            Standby
           </span>
-        `;
-        rightDiv.appendChild(bellIndicator);
-      }
+        </div>
+      </div>
 
-      const delBtn = document.createElement("button");
-      delBtn.type = "button";
-      delBtn.className =
-        "w-8 h-8 rounded-xl bg-slate-950 hover:bg-rose-500/20 text-slate-500 hover:text-rose-400 border border-slate-800 flex items-center justify-center text-xs font-bold";
-      delBtn.textContent = "✕";
-      delBtn.addEventListener("click", () => this.deleteAgenda(item.id));
-      rightDiv.appendChild(delBtn);
+      <!-- SOUND & TEST ALARM CONTROLS -->
+      <div class="mt-3 pt-3 border-t border-slate-800/80 flex items-center justify-between gap-2">
+        <button id="btn-enable-sound" type="button" class="flex-1 py-2 px-3 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition active:scale-95">
+          🔊 Enable Sound (Off)
+        </button>
+        <button id="btn-test-alarm" type="button" class="flex-1 py-2 px-3 rounded-xl text-xs font-bold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 transition active:scale-95">
+          🔔 Test Alarm & Bell
+        </button>
+      </div>
+    </header>
 
-      row.appendChild(leftDiv);
-      row.appendChild(rightDiv);
-      this.listContainer.appendChild(row);
-    });
-  },
+    <!-- 2. ACTIVE ALARM RINGING BANNER (MOGAWAS KON MAG-ALARM NA) -->
+    <section id="active-alarm-banner" class="hidden rounded-3xl p-4 bg-gradient-to-r from-rose-600/90 to-amber-600/90 border-2 border-amber-300 shadow-2xl space-y-3">
+      <div class="flex items-start gap-3">
+        <div class="text-3xl bell-ringing">🔔</div>
+        <div class="flex-1">
+          <p class="text-xs font-black uppercase tracking-widest text-amber-100">
+            ⏰ ORAS NA SA IMONG AGENDA!
+          </p>
+          <h2 id="alarm-banner-title" class="text-lg font-extrabold text-white leading-tight mt-0.5">
+            Agenda Title Here
+          </h2>
+          <p id="alarm-banner-time" class="text-xs text-rose-100 font-mono mt-0.5">
+            Scheduled: 00:00
+          </p>
+        </div>
+      </div>
+      <div class="grid grid-cols-3 gap-2 pt-1">
+        <button id="btn-stop-alarm" type="button" class="py-2.5 px-2 rounded-xl bg-slate-950/90 text-white text-xs font-bold active:scale-95">
+          🔕 Stop Bell
+        </button>
+        <button id="btn-snooze-alarm" type="button" class="py-2.5 px-2 rounded-xl bg-white/20 text-white text-xs font-bold border border-white/30 active:scale-95">
+          💤 +5 Mins
+        </button>
+        <button id="btn-done-alarm" type="button" class="py-2.5 px-2 rounded-xl bg-emerald-500 text-slate-950 text-xs font-extrabold active:scale-95">
+          ✓ Done Na
+        </button>
+      </div>
+    </section>
 
-  loadFromStorage() {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      this.allData = raw ? JSON.parse(raw) : {};
-    } catch (e) {
-      console.error("Failed to read localStorage:", e);
-      this.allData = {};
-    }
-  },
+    <!-- 3. DATE PICKER (MONTH, DAY, YEAR 2026 - 2040) -->
+    <section class="glass-card rounded-3xl p-4 border border-slate-800 space-y-3">
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-bold uppercase tracking-wider text-slate-400">
+          📅 Pilia ang Petsa (2026–2040)
+        </span>
+        <button id="btn-jump-today" type="button" class="text-xs font-bold text-indigo-400 hover:text-indigo-300 px-2.5 py-1 rounded-lg bg-indigo-500/10 border border-indigo-500/20 active:scale-95">
+          Karong Adlawa (Today)
+        </button>
+      </div>
 
-  saveToStorage() {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.allData));
-    } catch (e) {
-      console.error("Failed to save localStorage:", e);
-    }
-  },
+      <!-- Month / Day / Year Dropdowns -->
+      <div class="grid grid-cols-12 gap-2">
+        <div class="col-span-5">
+          <label class="block text-[10px] text-slate-400 mb-1 font-semibold">MONTH</label>
+          <select id="select-month" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-2 text-sm font-semibold text-white focus:outline-none focus:border-indigo-500"></select>
+        </div>
+        <div class="col-span-3">
+          <label class="block text-[10px] text-slate-400 mb-1 font-semibold">DAY</label>
+          <select id="select-day" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-2 text-sm font-semibold text-white focus:outline-none focus:border-indigo-500"></select>
+        </div>
+        <div class="col-span-4">
+          <label class="block text-[10px] text-slate-400 mb-1 font-semibold">YEAR</label>
+          <select id="select-year" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-2 text-sm font-semibold text-amber-300 focus:outline-none focus:border-indigo-500"></select>
+        </div>
+      </div>
 
-  escapeHTML(str) {
-    return str.replace(/[&<>"']/g, (m) => ({
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#39;"
-    }[m]));
-  }
-};
+      <!-- MONDAY - SUNDAY DAY SELECTOR STRIP -->
+      <div>
+        <label class="block text-[10px] text-slate-400 mb-1.5 font-semibold uppercase">
+          Pilia ang Adlaw (Monday – Sunday)
+        </label>
+        <div id="week-strip" class="grid grid-cols-7 gap-1.5">
+          <!-- Dynamically populated by app.js -->
+        </div>
+      </div>
 
-window.AgendaApp = AgendaApp;
-document.addEventListener("DOMContentLoaded", () => AgendaApp.init());
+      <!-- Selected Date Banner -->
+      <div class="pt-2 border-t border-slate-800/80 flex items-center justify-between">
+        <div>
+          <p id="selected-day-name" class="text-xs font-extrabold uppercase tracking-wider text-indigo-400">
+            MONDAY
+          </p>
+          <h2 id="selected-full-date" class="text-base font-bold text-white">
+            January 1, 2026
+          </h2>
+        </div>
+        <div id="agenda-progress-badge" class="text-xs font-bold px-3 py-1 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
+          0 / 0 Done
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. ADD NEW AGENDA FORM -->
+    <section class="glass-card rounded-3xl p-4 border border-slate-800 space-y-3">
+      <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400">
+        ➕ Dugang og Agenda niining Petsaha
+      </h3>
+
+      <form id="form-add-agenda" class="space-y-2.5">
+        <input
+          id="input-agenda-title"
+          type="text"
+          placeholder="Unsay imong buhaton? (e.g. Meeting, Bayad Bills)"
+          required
+          class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+        />
+
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block text-[10px] text-slate-400 mb-1 font-semibold">
+              ⏰ ORAS SA ALARM (Optional)
+            </label>
+            <input
+              id="input-agenda-time"
+              type="time"
+              class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-amber-300 font-mono focus:outline-none focus:border-indigo-500"
+            />
+          </div>
+
+          <div>
+            <label class="block text-[10px] text-slate-400 mb-1 font-semibold">
+              📌 PRIORITY
+            </label>
+            <select
+              id="input-agenda-priority"
+              class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+            >
+              <option value="normal">Normal</option>
+              <option value="important">Important ⭐</option>
+              <option value="urgent">Urgent 🔥</option>
+            </select>
+          </div>
+        </div>
+
+        <button
+          type="submit"
+          class="w-full py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white font-bold text-sm shadow-lg active:scale-98 transition"
+        >
+          + Save Agenda
+        </button>
+      </form>
+    </section>
+
+    <!-- 5. AGENDA LIST SECTION -->
+    <section class="glass-card rounded-3xl p-4 border border-slate-800 space-y-3">
+      <div class="flex items-center justify-between">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400">
+          📋 Imong Agenda List
+        </h3>
+        <div class="flex gap-1">
+          <button id="filter-all" type="button" class="text-[11px] px-2.5 py-1 rounded-lg font-bold bg-indigo-600 text-white">
+            All
+          </button>
+          <button id="filter-pending" type="button" class="text-[11px] px-2.5 py-1 rounded-lg font-bold bg-slate-800 text-slate-400">
+            Pending
+          </button>
+          <button id="filter-done" type="button" class="text-[11px] px-2.5 py-1 rounded-lg font-bold bg-slate-800 text-slate-400">
+            Done
+          </button>
+        </div>
+      </div>
+
+      <div id="agenda-list-container" class="space-y-2.5">
+        <!-- Populated by app.js -->
+      </div>
+    </section>
+
+  </div>
+
+  <!-- Hidden iOS Audio Element (Dynamic WAV will be loaded here by alarm.js) -->
+  <audio id="ios-alarm-audio" loop playsinline preload="auto"></audio>
+
+  <!-- Separated JavaScript Files (Order: alarm.js first, then app.js) -->
+  <script src="alarm.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
