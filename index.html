@@ -9,7 +9,11 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Agenda Ko" />
-  <link rel="apple-touch-icon" href="image_0.png" />
+
+  <!-- IMPORTANTE: Apple Touch Icon Links para sa iPhone Home Screen -->
+  <link id="apple-icon-180" rel="apple-touch-icon" sizes="180x180" href="Gemini_Generated_Image_vern4evern4evern.jpg" />
+  <link id="apple-icon-default" rel="apple-touch-icon" href="Gemini_Generated_Image_vern4evern4evern.jpg" />
+  <link id="favicon-link" rel="icon" type="image/jpeg" href="Gemini_Generated_Image_vern4evern4evern.jpg" />
 
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -25,18 +29,28 @@
     <!-- 1. TOP HEADER & GIANT BELL WIDGET -->
     <header class="glass-card rounded-3xl p-4 border border-slate-800 shadow-xl">
       <div class="flex items-center justify-between gap-3">
-        <!-- App Title & Live Clock -->
+        <!-- App Title, Logo & Live Clock -->
         <div>
-          <div class="flex items-center gap-2">
-            <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
-            <h1 class="text-xl font-extrabold tracking-tight bg-gradient-to-r from-indigo-400 via-cyan-300 to-emerald-300 bg-clip-text text-transparent">
-              Agenda Ko
-            </h1>
-            <span class="text-[11px] bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded-full font-semibold">
-              2026–2040
-            </span>
+          <div class="flex items-center gap-2.5">
+            <!-- IMONG APP LOGO ICON -->
+            <img
+              id="app-header-logo"
+              src="Gemini_Generated_Image_vern4evern4evern.jpg"
+              alt="Agenda Ko Logo"
+              class="w-10 h-10 rounded-xl object-cover border border-indigo-400/40 shadow-md"
+            />
+            <div>
+              <div class="flex items-center gap-2">
+                <h1 class="text-xl font-extrabold tracking-tight bg-gradient-to-r from-indigo-400 via-cyan-300 to-emerald-300 bg-clip-text text-transparent">
+                  Agenda Ko
+                </h1>
+                <span class="text-[11px] bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded-full font-semibold">
+                  2026–2040
+                </span>
+              </div>
+            </div>
           </div>
-          <p id="live-clock" class="text-2xl font-mono font-bold text-white mt-1">
+          <p id="live-clock" class="text-2xl font-mono font-bold text-white mt-1.5">
             00:00:00 AM
           </p>
           <p id="live-today-label" class="text-xs text-slate-400">
