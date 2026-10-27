@@ -473,3 +473,66 @@ const AgendaApp = {
 
 window.AgendaApp = AgendaApp;
 document.addEventListener("DOMContentLoaded", () => AgendaApp.init());
+
+/**
+ * Awtomatikong mo-crop sa tunga sa widescreen logo aron mahimong
+ * saktong 180x180 Square Icon para sa iPhone Home Screen
+ */
+function setupiOSHomeScreenIcon() {
+  const possibleFiles = [
+    "Gemini_Generated_Image_vern4evern4evern.jpg",
+    "logo.jpg",
+    "logo.png",
+    "image_0.png"
+  ];
+
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  let currentTry = 0;
+
+  img.onload = function () {
+    try {
+      // Kuwadrado nga crop sa tunga mismo sa icon
+      const canvas = document.createElement("canvas");
+      const size = 180; // Standard iPhone Home Screen Icon size
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext("2d");
+
+      // Kuhaon ang kuwadrado sa tunga-tunga sa widescreen image (zoomed in sa icon)
+      const minSide = Math.min(img.width, img.height);
+      const cropSize = minSide * 0.72; // 72% sa gitas-on aron sakto gyud sa calendar icon box
+      const sx = (img.width - cropSize) / 2;
+      const sy = (img.height - cropSize) / 2;
+
+      ctx.drawImage(img, sx, sy, cropSize, cropSize, 0, 0, size, size);
+      const squareDataUrl = canvas.toDataURL("image/png");
+
+      // I-update ang Apple Touch Icon links para sa Safari "Add to Home Screen"
+      const icon180 = document.getElementById("apple-icon-180");
+      const iconDef = document.getElementById("apple-icon-default");
+      const fav = document.getElementById("favicon-link");
+      const headerLogo = document.getElementById("app-header-logo");
+
+      if (icon180) icon180.href = squareDataUrl;
+      if (iconDef) iconDef.href = squareDataUrl;
+      if (fav) fav.href = squareDataUrl;
+      if (headerLogo) headerLogo.src = squareDataUrl;
+    } catch (err) {
+      console.warn("Icon crop fallback:", err);
+    }
+  };
+
+  img.onerror = function () {
+    currentTry++;
+    if (currentTry < possibleFiles.length) {
+      img.src = possibleFiles[currentTry];
+    }
+  };
+
+  img.src = possibleFiles[0];
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  setupiOSHomeScreenIcon();
+});
